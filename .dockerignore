@@ -1,0 +1,18 @@
+# Never bake local secrets or real data into the image
+.secret_key
+.password_hash
+ledger.db
+ledger.db-journal
+ledger.db-wal
+ledger.db-shm
+*.log
+
+.git
+.gitignore
+.claude
+__pycache__/
+*.pyc
+fly.toml
+Dockerfile
+README.md
+CLAUDE.md

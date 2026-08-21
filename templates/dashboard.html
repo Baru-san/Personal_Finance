@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Personal Finance Terminal</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+<script src="{{ url_for('static', filename='chart.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}" class="active">Dashboard</a>
+      <a href="{{ url_for('ledger') }}">Ledger</a>
+      <a href="{{ url_for('savings') }}">Savings</a>
+      <a href="{{ url_for('trends') }}">Trends</a>
+      <a href="{{ url_for('income') }}">Income</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show balance --month=current</div>
+    <div class="balance-label">Available This Month</div>
+    <div class="balance-value">{{ available | rp }}</div>
+    <div class="balance-sub">
+      Income {{ income | rp }} — Scheduled {{ total_scheduled | rp }}{% if manual_saved %} — Set aside {{ manual_saved | rp }}{% endif %} &nbsp;
+      <span class="up">{{ funded_count }} categories funded</span>
+      &nbsp;·&nbsp;
+      <a href="{{ url_for('income') }}" class="income-link">Manage income →</a>
+    </div>
+  </section>
+
+  <div class="ticker">
+    <span>
+      {% for c in categories %}
+        {% if c.status == 'DUE TODAY' %}{{ c.name|upper }} DUE TODAY: {{ c.budget|rp }} &nbsp;&nbsp;///&nbsp;&nbsp;{% endif %}
+        {% if c.status == 'OVER BUDGET' %}{{ c.name|upper }} OVER BUDGET &nbsp;&nbsp;///&nbsp;&nbsp;{% endif %}
+      {% endfor %}
+      TOTAL SCHEDULED THIS MONTH: {{ total_scheduled | rp }} &nbsp;&nbsp;///&nbsp;&nbsp;
+      AUTO-SAVED POT: {{ pots[2]['balance'] | rp if pots|length > 2 else '0' }} &nbsp;&nbsp;///&nbsp;&nbsp;
+    </span>
+  </div>
+
+  <section class="section">
+    <div class="section-title"><span class="num">01</span>SCHEDULED CATEGORIES</div>
+    <div class="window-grid">
+      {% for c in categories %}
+      <div class="window" data-category-id="{{ c.id }}" data-category-name="{{ c.name }}" data-budget="{{ c.budget }}" data-spent="{{ c.spent }}">
+        <div class="window-bar">
+          <span><span class="idx">{{ "%02d"|format(loop.index) }}</span>{{ c.name|upper }}</span>
+          <span class="badge {{ 'weekly' if c.period == 'weekly' else 'monthly' }}">{{ c.period|upper }}</span>
+        </div>
+        <div class="window-body">
+          <h3 class="window-spend-line">{{ c.spent | rp }} / {{ c.budget | rp }}{% if c.period == 'weekly' %}<span class="per-window">/wk</span>{% endif %}</h3>
+          <div class="bar-track"><div class="bar-fill {{ c.css }}" data-pct="{{ c.pct }}"></div></div>
+          <div class="window-figures">
+            <span>
+              {% if c.period == 'weekly' %}Week of {{ c.window_label }}
+              {% elif c.due_day %}Due day {{ c.due_day }}
+              {% else %}Flexible{% endif %}
+            </span>
+            <span class="status {{ c.css }}">{{ c.status }}</span>
+          </div>
+          <div class="window-actions">
+            <form class="mini-form" action="{{ url_for('add_expense') }}" method="post" data-offline-queue="expense">
+              <input type="hidden" name="category_id" value="{{ c.id }}">
+              <input type="number" name="amount" placeholder="Rp" required>
+              <button type="submit">SPEND</button>
+            </form>
+          </div>
+          <details class="edit-toggle">
+            <summary>EDIT</summary>
+            <form class="mini-form category-edit-form" action="{{ url_for('edit_category', category_id=c.id) }}" method="post" style="flex-wrap:wrap; gap:8px; margin-top:8px;">
+              <input type="text" name="name" value="{{ c.name }}" required style="flex:2; min-width:120px;">
+              <input type="number" name="budget_amount" value="{{ c.budget }}" required style="flex:1; min-width:100px;">
+              <select name="period" class="period-select" style="flex:1; min-width:110px;">
+                <option value="monthly" {{ 'selected' if c.period == 'monthly' else '' }}>Monthly</option>
+                <option value="weekly" {{ 'selected' if c.period == 'weekly' else '' }}>Weekly (resets Mon)</option>
+              </select>
+              <input type="number" name="due_day" class="due-day-input" value="{{ c.due_day or '' }}" min="1" max="28"
+                     placeholder="Due day (1-28, optional)" {{ 'disabled' if c.period == 'weekly' else '' }} style="flex:1; min-width:100px;">
+              <button type="submit">SAVE</button>
+            </form>
+          </details>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">02</span>CURRENT MONTH SPENDING</div>
+    <div class="pots">
+      <div class="pot">
+        <div class="pot-value">{{ total_spent | rp }}</div>
+        <div class="pot-label">Spent This Month</div>
+      </div>
+      <div class="pot">
+        <div class="pot-value">{{ total_scheduled | rp }}</div>
+        <div class="pot-label">Total Scheduled</div>
+      </div>
+      <div class="pot">
+        <div class="pot-value">{{ funded_count }}</div>
+        <div class="pot-label">Categories Fully Funded</div>
+      </div>
+    </div>
+
+    <div class="trend-chart-title">Spending Trend — Day By Day</div>
+    <div class="trend-chart-wrap">
+      <svg id="trend-svg" class="trend-chart" viewBox="0 0 {{ trend.w }} {{ trend.h }}"
+           data-points='{{ trend.points_json | safe }}'>
+        <line class="trend-grid" x1="{{ trend.plot_left }}" x2="{{ trend.plot_right }}" y1="{{ trend.plot_bottom }}" y2="{{ trend.plot_bottom }}"></line>
+        <line class="trend-grid" x1="{{ trend.plot_left }}" x2="{{ trend.plot_right }}" y1="{{ trend.plot_top }}" y2="{{ trend.plot_top }}"></line>
+        <text class="trend-axis-label" x="{{ trend.plot_left - 8 }}" y="{{ trend.plot_bottom }}" text-anchor="end" dy="3">Rp 0</text>
+        <text class="trend-axis-label" x="{{ trend.plot_left - 8 }}" y="{{ trend.plot_top }}" text-anchor="end" dy="3">{{ trend.y_max | rp }}</text>
+        {% if trend.points %}
+        <text class="trend-axis-label" x="{{ trend.plot_left }}" y="{{ trend.h - 6 }}" text-anchor="start">{{ trend.points[0].label }}</text>
+        <text class="trend-axis-label" x="{{ trend.plot_right }}" y="{{ trend.h - 6 }}" text-anchor="end">{{ trend.points[-1].label }}</text>
+        <path class="trend-area" d="{{ trend.area_path }}"></path>
+        <polyline class="trend-line" points="{{ trend.polyline }}"></polyline>
+        {% for p in trend.points %}
+        <circle class="trend-hit" cx="{{ p.px }}" cy="{{ p.py }}" r="10"></circle>
+        {% endfor %}
+        <circle class="trend-end-dot" cx="{{ trend.points[-1].px }}" cy="{{ trend.points[-1].py }}" r="5"></circle>
+        <text class="trend-end-label" x="{{ trend.points[-1].px - 8 }}" y="{{ trend.points[-1].py - 10 }}" text-anchor="end">{{ trend.points[-1].cumulative | rp }}</text>
+        <line id="trend-crosshair" class="trend-crosshair" x1="0" x2="0" y1="{{ trend.plot_top }}" y2="{{ trend.plot_bottom }}"></line>
+        <circle id="trend-hover-dot" class="trend-hover-dot" r="5"></circle>
+        {% endif %}
+      </svg>
+      <div id="trend-tooltip" class="trend-tooltip">
+        <div class="tt-date"></div>
+        <div class="tt-total"></div>
+        <div class="tt-day"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">03</span>RECENT ACTIVITY</div>
+    <div class="log" id="recent-activity-log">
+      {% for t in recent %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ t['created_at'][5:10] }}</div>
+          <div class="msg">
+            {% if t['kind'] == 'spend' %}<span class="tag spend">[SPEND]</span>
+            {% elif t['kind'] == 'income' %}<span class="tag income">[INCOME]</span>
+            {% else %}<span class="tag save">[AUTO-SAVE]</span>{% endif %}
+            {{ t['category_name'] }}{% if t['note'] %} — {{ t['note'] }}{% endif %}
+          </div>
+        </div>
+        <div class="amt {{ 'neg' if t['kind'] == 'spend' else 'pos' }}">
+          {{ '-' if t['kind'] == 'spend' else '+' }}{{ t['amount'] | rp }}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No activity yet. Log your first expense above.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">04</span>ADD SCHEDULED CATEGORY</div>
+    <form action="{{ url_for('add_category') }}" method="post" class="mini-form" data-offline-queue="category" style="max-width:600px; flex-wrap:wrap; gap:10px;">
+      <input type="text" name="name" placeholder="Category name" required style="flex:2; min-width:160px;">
+      <input type="number" name="budget_amount" placeholder="Budget (Rp)" required style="flex:1; min-width:120px;">
+      <select name="period" class="period-select" style="flex:1; min-width:120px;">
+        <option value="monthly" selected>Monthly</option>
+        <option value="weekly">Weekly (resets Mon)</option>
+      </select>
+      <input type="number" name="due_day" class="due-day-input" placeholder="Due day (1-28, optional)" min="1" max="28" style="flex:1; min-width:140px;">
+      <button type="submit" style="flex:0 0 auto;">ADD CATEGORY</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">05</span>LOG ONE-OFF EXPENSE</div>
+    <form action="{{ url_for('add_custom_expense') }}" method="post" class="mini-form" data-offline-queue="custom_expense" style="max-width:420px; flex-wrap:wrap; gap:10px;">
+      <input type="text" name="label" placeholder="Label (optional)" style="flex:2; min-width:160px;">
+      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <button type="submit" style="flex:0 0 auto;">ADD EXPENSE</button>
+    </form>
+  </section>
+
+  <div class="actions">
+    <form action="{{ url_for('close_day') }}" method="post">
+      <button type="submit" class="btn primary">▶ Run Daily Close (Sweep Unspent → Savings)</button>
+    </form>
+    <a href="{{ url_for('ledger') }}"><button type="button" class="btn ghost">View Full Ledger</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>LOCAL / SELF-HOSTED — NO THIRD-PARTY TRACKING</div>
+  </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  initPctBars();
+
+  document.querySelectorAll('form').forEach(function (form) {
+    var periodSelect = form.querySelector('.period-select');
+    var dueDayInput = form.querySelector('.due-day-input');
+    if (!periodSelect || !dueDayInput) return;
+    function sync() {
+      var isWeekly = periodSelect.value === 'weekly';
+      dueDayInput.disabled = isWeekly;
+      dueDayInput.placeholder = isWeekly ? 'Resets every Monday' : 'Due day (1-28, optional)';
+      if (isWeekly) dueDayInput.value = '';
+    }
+    periodSelect.addEventListener('change', sync);
+    sync();
+  });
+
+  initLineChart({
+    svgId: 'trend-svg', crosshairId: 'trend-crosshair', dotId: 'trend-hover-dot',
+    tooltipId: 'trend-tooltip', totalKey: 'cumulative', dayKey: 'amount', daySuffix: ' that day'
+  });
+});
+</script>
+
+</body>
+</html>

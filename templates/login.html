@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Login</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <div class="topbar">
+    <span class="logo">// LEDGER.SYS</span>
+  </div>
+
+  <section class="login-hero">
+    <div class="window login-window">
+      <div class="window-bar"><span class="idx">01</span><span>AUTHENTICATE</span></div>
+      <div class="window-body">
+        <div class="prompt-line"><span>user@ledger</span>:~$ login</div>
+        {% if error %}
+        <div class="login-error">⚠ {{ error }}</div>
+        {% endif %}
+        <form method="post" action="{{ url_for('login') }}" class="mini-form login-form">
+          <input type="hidden" name="next" value="{{ next }}">
+          <input type="password" name="password" placeholder="Password" required autofocus>
+          <button type="submit">UNLOCK</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+  </footer>
+
+  <script>
+    // Purge the cached app shell after logout so an installed PWA doesn't
+    // keep rendering the previous session's balances to whoever holds the
+    // device next. The offline write queue in IndexedDB is untouched — it
+    // isn't device security, just makes sure a shared device shows nothing
+    // stale after logging out.
+    if (new URLSearchParams(location.search).get('logged_out') === '1' && 'caches' in window) {
+      caches.keys().then(function (keys) {
+        keys.filter(function (k) { return k.indexOf('ledger-') === 0; })
+            .forEach(function (k) { caches.delete(k); });
+      });
+    }
+  </script>
+
+</body>
+</html>

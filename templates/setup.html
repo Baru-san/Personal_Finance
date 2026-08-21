@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// First-Time Setup</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <div class="topbar">
+    <span class="logo">// LEDGER.SYS</span>
+  </div>
+
+  <section class="login-hero">
+    <div class="window login-window">
+      <div class="window-bar"><span class="idx">01</span><span>FIRST-TIME SETUP</span></div>
+      <div class="window-body">
+        <div class="prompt-line"><span>user@ledger</span>:~$ set-password</div>
+        <p class="setup-note">Choose the password that will protect this Ledger instance.
+          It's stored only as a one-way hash — no one, including the server operator,
+          can recover it afterward.</p>
+        {% if error %}
+        <div class="login-error">⚠ {{ error }}</div>
+        {% endif %}
+        <form method="post" action="{{ url_for('setup') }}" class="mini-form login-form">
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="password" name="password" placeholder="New password (min 8 characters)" required autofocus minlength="8">
+          <input type="password" name="confirm" placeholder="Confirm password" required minlength="8">
+          <button type="submit">SET PASSWORD</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+  </footer>
+
+</body>
+</html>

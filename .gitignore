@@ -1,0 +1,22 @@
+# Secrets — never commit these. Both are auto-generated on first run.
+.secret_key
+.password_hash
+
+# Local data
+ledger.db
+ledger.db-journal
+
+# SQLite sidecar files
+ledger.db-wal
+ledger.db-shm
+
+# Server console output — in normal (password-enabled) mode the first-run
+# console prints the one-time /setup?token=..., so this must never be committed.
+server.log
+*.log
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+__pycache__/
+*.pyc

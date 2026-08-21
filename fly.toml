@@ -1,0 +1,28 @@
+# Rename this app before the first deploy: must be unique across Fly, and may
+# contain only lowercase letters, numbers and dashes (no underscores, no caps).
+app = "ledger-retro-finance"
+primary_region = "sin"   # Singapore; closest Fly region to Indonesia
+
+[build]
+
+[env]
+  # Not secrets, so they live here rather than in `fly secrets`.
+  LEDGER_ENV = "production"   # marks the session cookie Secure (HTTPS only)
+  DB_PATH = "/data/ledger.db" # the volume below, NOT the app directory
+
+[mounts]
+  source = "ledger_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  # A volume attaches to exactly one machine — never scale this past 1.
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

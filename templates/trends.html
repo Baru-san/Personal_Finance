@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Trends</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+<script src="{{ url_for('static', filename='chart.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('ledger') }}">Ledger</a>
+      <a href="{{ url_for('savings') }}">Savings</a>
+      <a href="{{ url_for('trends') }}" class="active">Trends</a>
+      <a href="{{ url_for('income') }}">Income</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show trends --months=12</div>
+    <div class="balance-label">12-Month Net Cash Flow</div>
+    <div class="balance-value {{ 'neg' if cash_flow.net_total < 0 else '' }}">{{ cash_flow.net_total | rp }}</div>
+    <div class="balance-sub">
+      Income {{ cash_flow.income_total | rp }} &nbsp;·&nbsp; Spent {{ cash_flow.spend_total | rp }}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">01</span>NET CASH FLOW (LAST 12 MONTHS)</div>
+    <div class="pots">
+      <div class="pot">
+        <div class="pot-value">{{ cash_flow.income_total | rp }}</div>
+        <div class="pot-label">Total Income</div>
+      </div>
+      <div class="pot">
+        <div class="pot-value">{{ cash_flow.spend_total | rp }}</div>
+        <div class="pot-label">Total Spent</div>
+      </div>
+      <div class="pot">
+        <div class="pot-value {{ 'neg' if cash_flow.net_total < 0 else '' }}">{{ cash_flow.net_total | rp }}</div>
+        <div class="pot-label">Net Surplus / Deficit</div>
+      </div>
+    </div>
+
+    <div class="chart-legend">
+      <div class="chart-legend-item"><span class="chart-legend-swatch income"></span>Income</div>
+      <div class="chart-legend-item"><span class="chart-legend-swatch spend"></span>Spend</div>
+    </div>
+    <div class="trend-chart-wrap">
+      <svg id="cashflow-svg" class="trend-chart" viewBox="0 0 {{ cash_flow.w }} {{ cash_flow.h }}">
+        <line class="trend-grid" x1="{{ cash_flow.plot_left }}" x2="{{ cash_flow.plot_right }}" y1="{{ cash_flow.plot_bottom }}" y2="{{ cash_flow.plot_bottom }}"></line>
+        <line class="trend-grid" x1="{{ cash_flow.plot_left }}" x2="{{ cash_flow.plot_right }}" y1="{{ cash_flow.plot_top }}" y2="{{ cash_flow.plot_top }}"></line>
+        <text class="trend-axis-label" x="{{ cash_flow.plot_left - 8 }}" y="{{ cash_flow.plot_bottom }}" text-anchor="end" dy="3">Rp 0</text>
+        <text class="trend-axis-label" x="{{ cash_flow.plot_left - 8 }}" y="{{ cash_flow.plot_top }}" text-anchor="end" dy="3">{{ cash_flow.y_max | rp }}</text>
+        {% for r in cash_flow.rows %}
+        <rect class="gbar-fill income" x="{{ r.income_x }}" y="{{ r.income_y }}" width="{{ cash_flow.bar_w }}" height="{{ r.income_h }}">
+          <title>{{ r.full_label }} — Income: {{ r.income | rp }}</title>
+        </rect>
+        <rect class="gbar-fill spend" x="{{ r.spend_x }}" y="{{ r.spend_y }}" width="{{ cash_flow.bar_w }}" height="{{ r.spend_h }}">
+          <title>{{ r.full_label }} — Spend: {{ r.spend | rp }}</title>
+        </rect>
+        <text class="trend-axis-label" x="{{ r.group_cx }}" y="{{ cash_flow.h - 6 }}" text-anchor="middle">{{ r.label }}</text>
+        {% endfor %}
+        {% if cash_flow.rows %}
+        <text class="gbar-value income" x="{{ cash_flow.rows[-1].income_x + cash_flow.bar_w / 2 }}" y="{{ cash_flow.rows[-1].income_y - 6 }}" text-anchor="middle">{{ cash_flow.rows[-1].income | rp }}</text>
+        <text class="gbar-value spend" x="{{ cash_flow.rows[-1].spend_x + cash_flow.bar_w / 2 }}" y="{{ cash_flow.rows[-1].spend_y - 6 }}" text-anchor="middle">{{ cash_flow.rows[-1].spend | rp }}</text>
+        {% else %}
+        <text class="trend-axis-label" x="{{ cash_flow.w / 2 }}" y="{{ cash_flow.h / 2 }}" text-anchor="middle">No data yet.</text>
+        {% endif %}
+      </svg>
+    </div>
+    <div class="chart-note">Income reflects today's scheduled income sources applied to every month, plus that month's own custom (one-off) income — not a historical record of what income actually was.</div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">02</span>CUMULATIVE AUTO-SAVED</div>
+    <div class="trend-chart-wrap">
+      <svg id="trajectory-svg" class="trend-chart" viewBox="0 0 {{ trajectory.w }} {{ trajectory.h }}"
+           data-points='{{ trajectory.points_json | safe }}'>
+        <line class="trend-grid" x1="{{ trajectory.plot_left }}" x2="{{ trajectory.plot_right }}" y1="{{ trajectory.plot_bottom }}" y2="{{ trajectory.plot_bottom }}"></line>
+        <line class="trend-grid" x1="{{ trajectory.plot_left }}" x2="{{ trajectory.plot_right }}" y1="{{ trajectory.plot_top }}" y2="{{ trajectory.plot_top }}"></line>
+        <text class="trend-axis-label" x="{{ trajectory.plot_left - 8 }}" y="{{ trajectory.plot_bottom }}" text-anchor="end" dy="3">Rp 0</text>
+        <text class="trend-axis-label" x="{{ trajectory.plot_left - 8 }}" y="{{ trajectory.plot_top }}" text-anchor="end" dy="3">{{ trajectory.y_max | rp }}</text>
+        {% if trajectory.points %}
+        <text class="trend-axis-label" x="{{ trajectory.plot_left }}" y="{{ trajectory.h - 6 }}" text-anchor="start">{{ trajectory.points[0].label }}</text>
+        <text class="trend-axis-label" x="{{ trajectory.plot_right }}" y="{{ trajectory.h - 6 }}" text-anchor="end">{{ trajectory.points[-1].label }}</text>
+        <path class="trend-area" d="{{ trajectory.area_path }}"></path>
+        <polyline class="trend-line" points="{{ trajectory.polyline }}"></polyline>
+        {% for p in trajectory.points %}
+        <circle class="trend-hit" cx="{{ p.px }}" cy="{{ p.py }}" r="10"></circle>
+        {% endfor %}
+        <circle class="trend-end-dot" cx="{{ trajectory.points[-1].px }}" cy="{{ trajectory.points[-1].py }}" r="5"></circle>
+        <text class="trend-end-label" x="{{ trajectory.points[-1].px - 8 }}" y="{{ trajectory.points[-1].py - 10 }}" text-anchor="end">{{ trajectory.points[-1].cumulative | rp }}</text>
+        <line id="trajectory-crosshair" class="trend-crosshair" x1="0" x2="0" y1="{{ trajectory.plot_top }}" y2="{{ trajectory.plot_bottom }}"></line>
+        <circle id="trajectory-hover-dot" class="trend-hover-dot" r="5"></circle>
+        {% else %}
+        <text class="trend-axis-label" x="{{ trajectory.w / 2 }}" y="{{ trajectory.h / 2 }}" text-anchor="middle">No sweeps yet.</text>
+        {% endif %}
+      </svg>
+      <div id="trajectory-tooltip" class="trend-tooltip">
+        <div class="tt-date"></div>
+        <div class="tt-total"></div>
+        <div class="tt-day"></div>
+      </div>
+    </div>
+    <div class="chart-note">Running total of unspent budget swept into the "Auto-saved (Unspent)" pot — tracks that pot's source transactions, not manual pot edits, within the 1-year retention window.</div>
+  </section>
+
+  <div class="actions">
+    <a href="{{ url_for('savings') }}"><button type="button" class="btn ghost">← Back to Savings</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>TRAILING 12 MONTHS</div>
+  </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  initLineChart({
+    svgId: 'trajectory-svg', crosshairId: 'trajectory-crosshair', dotId: 'trajectory-hover-dot',
+    tooltipId: 'trajectory-tooltip', totalKey: 'cumulative', dayKey: 'month_total', daySuffix: ' that month'
+  });
+});
+</script>
+
+</body>
+</html>

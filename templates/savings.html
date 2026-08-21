@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Savings</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+<script src="{{ url_for('static', filename='chart.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('ledger') }}">Ledger</a>
+      <a href="{{ url_for('savings') }}" class="active">Savings</a>
+      <a href="{{ url_for('trends') }}">Trends</a>
+      <a href="{{ url_for('income') }}">Income</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show savings --pots</div>
+    <div class="balance-label">Auto-Saved (Unspent)</div>
+    <div class="balance-value">{{ pots[2]['balance'] | rp if pots|length > 2 else '0' }}</div>
+    <div class="balance-sub">
+      Weekly categories sweep leftovers every <span class="up">Monday</span> ({{ next_monday_label }}) &nbsp;·&nbsp;
+      Monthly categories sweep leftovers on the <span class="up">1st</span> ({{ next_month_first_label }})
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">01</span>SAVINGS &amp; SINKING POTS</div>
+    <div class="pots">
+      {% for p in pots %}
+      <div class="pot">
+        <div class="pot-value">{{ p['balance'] | rp }}</div>
+        <div class="pot-label">{{ p['name'] }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">02</span>SET ASIDE CURRENT MONEY</div>
+    <div class="balance-sub" style="margin-bottom:14px;">
+      Unallocated right now: <span class="up">{{ available | rp }}</span>
+      {% if manual_saved %}&nbsp;·&nbsp; already set aside this month: <span class="up">{{ manual_saved | rp }}</span>{% endif %}
+    </div>
+    <form action="{{ url_for('add_pot_deposit') }}" method="post" class="mini-form" style="max-width:620px; flex-wrap:wrap; gap:10px;">
+      <select name="pot_id" style="flex:1; min-width:160px;">
+        {% for p in pots %}
+        <option value="{{ p['id'] }}">{{ p['name'] }}</option>
+        {% endfor %}
+      </select>
+      <input type="number" name="amount" min="1" placeholder="Amount (Rp)" value="{{ available if available > 0 else '' }}" required style="flex:1; min-width:120px;">
+      <input type="text" name="note" placeholder="Note (optional)" style="flex:2; min-width:160px;">
+      <button type="submit" style="flex:0 0 auto;">SAVE TO POT</button>
+    </form>
+
+    <div class="log" style="margin-top:18px;">
+      {% for d in deposits %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ d['created_at'][5:10] }}</div>
+          <div class="msg">
+            <span class="tag save">[SET ASIDE]</span>
+            {{ d['pot_name'] }}{% if d['note'] %} — {{ d['note'] }}{% endif %}
+          </div>
+        </div>
+        <div class="amt pos">
+          +{{ d['amount'] | rp }}
+          <form action="{{ url_for('delete_pot_deposit', deposit_id=d['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="logout-btn" title="Undo this deposit">UNDO</button>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Nothing set aside by hand yet. Pick a pot above to bank money you already have.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">03</span>UPCOMING WEEKLY SWEEP — {{ next_monday_label }}</div>
+    <div class="window-grid">
+      {% for p in weekly_preview %}
+      <div class="window">
+        <div class="window-bar"><span>{{ p.name|upper }}</span></div>
+        <div class="window-body">
+          <h3>{{ p.spent | rp }} / {{ p.budget | rp }}</h3>
+          <div class="window-figures">
+            <span>Would save</span>
+            <span class="status ok">{{ p.leftover | rp }}</span>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No weekly categories yet.</div>
+      {% endfor %}
+    </div>
+    {% if weekly_preview %}
+    <div class="balance-sub" style="margin-top:14px;">Total if swept today: <span class="up">{{ weekly_total | rp }}</span></div>
+    {% endif %}
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">04</span>UPCOMING MONTHLY SWEEP — {{ next_month_first_label }}</div>
+    <div class="window-grid">
+      {% for p in monthly_preview %}
+      <div class="window">
+        <div class="window-bar"><span>{{ p.name|upper }}</span></div>
+        <div class="window-body">
+          <h3>{{ p.spent | rp }} / {{ p.budget | rp }}</h3>
+          <div class="window-figures">
+            <span>Would save</span>
+            <span class="status ok">{{ p.leftover | rp }}</span>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No monthly categories yet.</div>
+      {% endfor %}
+    </div>
+    {% if monthly_preview %}
+    <div class="balance-sub" style="margin-top:14px;">Total if swept today: <span class="up">{{ monthly_total | rp }}</span></div>
+    {% endif %}
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">05</span>SAVED BY EXPENSE</div>
+    <div class="hbar-chart">
+      {% for c in by_category %}
+      <div class="hbar-row">
+        <div class="hbar-label">{{ c.name|upper }}</div>
+        <div class="hbar-track">
+          <div class="hbar-fill" data-pct="{{ c.pct }}" title="{{ c.name }}: {{ c.total | rp }}"></div>
+        </div>
+        <div class="hbar-value">{{ c.total | rp }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No sweeps yet — nothing has moved to savings from an expense category.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">06</span>SAVED BY MONTH (LAST 12 MONTHS)</div>
+    {% if by_month %}
+    <div class="vbar-chart">
+      {% for m in by_month %}
+      <div class="vbar-col">
+        {% if m.total > 0 %}<div class="vbar-value">{{ m.total | rp }}</div>{% endif %}
+        <div class="vbar-fill" data-pct="{{ m.pct }}" title="{{ m.full_label }}: {{ m.total | rp }}"></div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="vbar-labels">
+      {% for m in by_month %}
+      <span>{{ m.label }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No sweeps yet.</div>
+    {% endif %}
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">07</span>SWEEP HISTORY</div>
+    <div class="log">
+      {% for h in history %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ h['created_at'][5:10] }}</div>
+          <div class="msg">
+            <span class="tag save">[AUTO-SAVE]</span>
+            {{ h['category_name'] }} <span class="badge {{ h['period'] }}">{{ h['period']|upper }}</span>
+          </div>
+        </div>
+        <div class="amt pos">+{{ h['amount'] | rp }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No sweeps yet. Run Daily Close on the sweep dates above to start banking leftovers.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="actions">
+    <form action="{{ url_for('close_day') }}" method="post">
+      <button type="submit" class="btn primary">▶ Run Daily Close (Sweep Unspent → Savings)</button>
+    </form>
+    <a href="{{ url_for('dashboard') }}"><button type="button" class="btn ghost">← Back to Dashboard</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>WEEKLY SWEEPS EVERY MONDAY — MONTHLY SWEEPS ON THE 1ST</div>
+  </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  initPctBars();
+});
+</script>
+
+</body>
+</html>

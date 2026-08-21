@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Income</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('ledger') }}">Ledger</a>
+      <a href="{{ url_for('savings') }}">Savings</a>
+      <a href="{{ url_for('trends') }}">Trends</a>
+      <a href="{{ url_for('income') }}" class="active">Income</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show income --month=current</div>
+    <div class="balance-label">Total Income This Month</div>
+    <div class="balance-value">{{ total_income | rp }}</div>
+    <div class="balance-sub">
+      Scheduled {{ scheduled_total | rp }} &nbsp;·&nbsp;
+      <span class="up">Custom {{ custom_total | rp }}</span>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">01</span>SCHEDULED INCOME</div>
+    <div class="window-grid">
+      {% for s in sources %}
+      <div class="window">
+        <div class="window-bar"><span class="idx">{{ "%02d"|format(loop.index) }}</span><span>{{ s['name']|upper }}</span></div>
+        <div class="window-body">
+          <h3>{{ s['amount'] | rp }}</h3>
+          <div class="window-figures">
+            <span>{% if s['due_day'] %}Arrives day {{ s['due_day'] }}{% else %}Flexible{% endif %}</span>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No scheduled income sources yet.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">02</span>ADD SCHEDULED INCOME</div>
+    <form action="{{ url_for('add_income_source') }}" method="post" class="mini-form" data-offline-queue="income_source" style="max-width:520px; flex-wrap:wrap; gap:10px;">
+      <input type="text" name="name" placeholder="Source name" required style="flex:2; min-width:160px;">
+      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <input type="number" name="due_day" placeholder="Arrival day (1-28, optional)" min="1" max="28" style="flex:1; min-width:160px;">
+      <button type="submit" style="flex:0 0 auto;">ADD SOURCE</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">03</span>ADD CUSTOM INCOME</div>
+    <form action="{{ url_for('add_custom_income') }}" method="post" class="mini-form" data-offline-queue="custom_income" style="max-width:420px; flex-wrap:wrap; gap:10px;">
+      <input type="text" name="label" placeholder="Label (optional)" style="flex:2; min-width:160px;">
+      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <button type="submit" style="flex:0 0 auto;">ADD INCOME</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">04</span>CUSTOM INCOME THIS MONTH</div>
+    <div class="log">
+      {% for c in custom_entries %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ c['created_at'][5:10] }}</div>
+          <div class="msg"><span class="tag income">[INCOME]</span>{{ c['label'] or 'Custom Income' }}</div>
+        </div>
+        <div class="amt pos">+{{ c['amount'] | rp }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No custom income logged this month.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="actions">
+    <a href="{{ url_for('dashboard') }}"><button type="button" class="btn ghost">← Back to Dashboard</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>SCHEDULED SOURCES COUNT EVERY MONTH — CUSTOM INCOME COUNTS FOR ITS OWN MONTH ONLY</div>
+  </footer>
+
+</body>
+</html>

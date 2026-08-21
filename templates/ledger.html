@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Full Ledger</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('ledger') }}" class="active">Ledger</a>
+      <a href="{{ url_for('savings') }}">Savings</a>
+      <a href="{{ url_for('trends') }}">Trends</a>
+      <a href="{{ url_for('income') }}">Income</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show ledger --month={{ selected_month }}</div>
+    <div class="balance-label">{{ count }} Entries</div>
+    <div class="balance-value" style="font-size:38px;">
+      {% for key, label in months %}{% if key == selected_month %}{{ label }}{% endif %}{% endfor %}
+    </div>
+    <div class="balance-sub">
+      Spent {{ spend_total | rp }} &nbsp;·&nbsp;
+      <span class="up">Auto-saved {{ save_total | rp }}</span> &nbsp;·&nbsp;
+      <span class="up">Income {{ income_total | rp }}</span>
+    </div>
+
+    <noscript><style>.month-select-wrap { display: none; }</style></noscript>
+
+    <div class="month-select-wrap" id="monthSelect">
+      <div class="month-select-trigger" id="monthSelectTrigger">
+        <span><span class="eyebrow">MONTH:</span>{{ months|selectattr('0', 'equalto', selected_month)|map(attribute='1')|first }}</span>
+        <span class="arrow">▾</span>
+      </div>
+      <div class="month-select-list" id="monthSelectList">
+        {% for key, label in months %}
+        <div class="month-select-option {{ 'selected' if key == selected_month else '' }}" data-month="{{ key }}">
+          {{ label }}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <noscript>
+      <form action="{{ url_for('ledger') }}" method="get" class="month-select-noscript">
+        <label class="eyebrow" for="monthSelectFallback">MONTH:</label>
+        <select id="monthSelectFallback" name="month">
+          {% for key, label in months %}
+          <option value="{{ key }}" {{ 'selected' if key == selected_month else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn ghost">Go</button>
+      </form>
+    </noscript>
+
+    <script>
+      (function () {
+        const wrap = document.getElementById('monthSelect');
+        const trigger = document.getElementById('monthSelectTrigger');
+        const list = document.getElementById('monthSelectList');
+
+        trigger.addEventListener('click', function (e) {
+          e.stopPropagation();
+          wrap.classList.toggle('open');
+        });
+
+        list.querySelectorAll('.month-select-option').forEach(function (opt) {
+          opt.addEventListener('click', function () {
+            const month = opt.getAttribute('data-month');
+            window.location.href = "{{ url_for('ledger') }}?month=" + month;
+          });
+        });
+
+        document.addEventListener('click', function () {
+          wrap.classList.remove('open');
+        });
+      })();
+    </script>
+  </section>
+
+  <section class="section">
+    <div class="log">
+      {% for t in entries %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ t['created_at'][5:10] }}</div>
+          <div class="msg">
+            {% if t['kind'] == 'spend' %}<span class="tag spend">[SPEND]</span>
+            {% elif t['kind'] == 'income' %}<span class="tag income">[INCOME]</span>
+            {% else %}<span class="tag save">[AUTO-SAVE]</span>{% endif %}
+            {{ t['category_name'] }}{% if t['note'] %} — {{ t['note'] }}{% endif %}
+          </div>
+        </div>
+        <div class="amt {{ 'neg' if t['kind'] == 'spend' else 'pos' }}">
+          {{ '-' if t['kind'] == 'spend' else '+' }}{{ t['amount'] | rp }}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">No transactions this month.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="actions">
+    <a href="{{ url_for('journal', month_key=selected_month) }}"><button type="button" class="btn primary">✎ Edit Journal</button></a>
+    <a href="{{ url_for('dashboard') }}"><button type="button" class="btn ghost">← Back to Dashboard</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>SHOWING {{ months|length }} MONTHS AVAILABLE (1-YEAR RETENTION)</div>
+  </footer>
+
+</body>
+</html>
