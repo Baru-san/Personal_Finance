@@ -807,6 +807,12 @@ def build_dashboard_data():
         (start, end),
     ).fetchone()["total"] + custom_expense_for_range(db, start, end)
 
+    # What's actually left in hand, as opposed to `available` above: that one
+    # reserves the full scheduled budget whether or not it has been spent yet,
+    # while this subtracts only money that has really left the wallet — real
+    # spending plus anything banked into a pot by hand this month.
+    cash_left = income - total_spent - manual_saved
+
     trend = spending_trend_chart(db, today, start, end)
 
     return {
@@ -821,6 +827,7 @@ def build_dashboard_data():
         "recent": recent,
         "funded_count": funded_count,
         "total_spent": total_spent,
+        "cash_left": cash_left,
         "trend": trend,
         "today": date.today().strftime("%d %b %Y").upper(),
     }

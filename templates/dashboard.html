@@ -97,11 +97,21 @@
   </section>
 
   <section class="section">
-    <div class="section-title"><span class="num">02</span>CURRENT MONTH SPENDING</div>
+    <div class="section-title"><span class="num">02</span>CURRENT MONTH CASH FLOW</div>
     <div class="pots">
+      <div class="pot">
+        <div class="pot-value">{{ income | rp }}</div>
+        <div class="pot-label">Income This Month</div>
+        <div class="pot-note">{{ scheduled_income | rp }} recurring{% if custom_income %} + {{ custom_income | rp }} one-off{% endif %}</div>
+      </div>
       <div class="pot">
         <div class="pot-value">{{ total_spent | rp }}</div>
         <div class="pot-label">Spent This Month</div>
+      </div>
+      <div class="pot">
+        <div class="pot-value{% if cash_left < 0 %} neg{% endif %}">{{ cash_left | rp }}</div>
+        <div class="pot-label">Money Left</div>
+        <div class="pot-note">Income minus spending{% if manual_saved %} and {{ manual_saved | rp }} set aside{% endif %}</div>
       </div>
       <div class="pot">
         <div class="pot-value">{{ total_scheduled | rp }}</div>
