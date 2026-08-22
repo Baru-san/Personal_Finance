@@ -154,17 +154,33 @@ function renderQueueBanner(count, sessionExpired) {
     : '⚠ ' + count + ' ' + noun + ' queued — will sync when back online.';
 }
 
+function isLoginBounce(res) {
+  // A redirect on its own does NOT mean the write failed: every add route
+  // answers a successful POST with 302 -> "/" or "/income", and fetch follows
+  // it, so res.redirected is true for the happy path too. An unauthenticated
+  // POST is answered with a bare 401 instead (app.py's require_login), never
+  // a redirect — so the only redirect worth distrusting is one that actually
+  // lands on the login screen.
+  if (!res.redirected) return false;
+  try {
+    return new URL(res.url, window.location.origin).pathname === '/login';
+  } catch (e) {
+    return false;
+  }
+}
+
 function replayQueue() {
   queueAll().then(function (records) {
     var sessionExpired = false;
     var attempts = records.map(function (record) {
       return fetch(record.url, { method: 'POST', body: new URLSearchParams(record.params) })
         .then(function (res) {
-          // A redirect (bounced to /login) or 401 means this write was never
-          // saved — do not remove it from the queue, even though the fetch
-          // itself "succeeded". Only a direct 2xx confirms the server wrote it.
-          if (res.ok && !res.redirected) return queueRemove(record.clientId);
-          if (res.redirected || res.status === 401) sessionExpired = true;
+          // Only a bounce to /login or a 401 means this write was never
+          // saved — do not remove it from the queue then, even though the
+          // fetch itself "succeeded". Any other 2xx confirms the server has
+          // it, including the 302-to-dashboard that a normal save returns.
+          if (res.ok && !isLoginBounce(res)) return queueRemove(record.clientId);
+          if (isLoginBounce(res) || res.status === 401) sessionExpired = true;
         })
         .catch(function () { /* still offline — leave it queued, next trigger retries */ });
     });
@@ -245,10 +261,11 @@ document.addEventListener('submit', function (event) {
 
   fetch(form.action, { method: 'POST', body: params })
     .then(function (res) {
-      // res.redirected catches the unauthenticated bounce to /login, which
-      // fetch follows and reports as a plain 200 — without this check an
-      // expired session would look like a successful save.
-      if (!res.ok || res.redirected) throw new Error('bad status ' + res.status);
+      // isLoginBounce catches the unauthenticated bounce to /login, which
+      // fetch follows and reports as a plain 200 — without that check an
+      // expired session would look like a successful save. It deliberately
+      // does not reject every redirect: a save that worked returns one.
+      if (!res.ok || isLoginBounce(res)) throw new Error('bad status ' + res.status);
       window.location.href = res.url || form.action;
     })
     .catch(function () {

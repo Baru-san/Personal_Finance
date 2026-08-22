@@ -148,7 +148,14 @@ fingerprint derived from the current password hash) or a matching
 unauthenticated **POST** gets a bare `401`, not a redirect —
 `static/offline.js`'s write queue treats a redirect-to-login as a false
 "success" and deletes the queued entry, so this distinction is load-bearing,
-not stylistic.
+not stylistic. The mirror-image invariant lives in `offline.js`'s
+`isLoginBounce()`: a redirect on its own must **not** be read as failure,
+because every successful add route answers its POST with a 302 to `/` or
+`/income` and `fetch` follows it, so `res.redirected` is true on the happy
+path too. Only a redirect whose final path is `/login` counts as an auth
+failure. An earlier version rejected every redirect, so no write was ever
+dequeued — entries saved fine server-side while the queue banner stuck at
+"session expired" forever.
 
 The password itself is never stored, only its one-way hash
 (`werkzeug.security.generate_password_hash`), sourced from either
