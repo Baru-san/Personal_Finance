@@ -101,8 +101,11 @@ instead:
   Flask's test client. Safe to run more than once a day; `sweep_unspent`
   refuses to sweep a window twice.
 
-Outline: sign up → `git clone` in a Bash console → `mkvirtualenv` and
-`pip install -r requirements.txt` → Web tab → *Manual configuration* (not the
+Outline: sign up → `git clone` in a Bash console →
+`mkvirtualenv --python=$(which python3.11) ledger` (use the interpreter
+`which` reports — a `/usr/bin/python3.x` path builds the virtualenv against a
+mismatched base and even `pip` then dies with `No module named
+'_posixsubprocess'`) → `pip install -r requirements.txt` → Web tab → *Manual configuration* (not the
 Flask option) → set source dir, virtualenv, and a `/static/` mapping to
 `<project>/static/` → paste the WSGI template → Reload → add the daily task
 `~/.virtualenvs/ledger/bin/python ~/Personal_Finance/close_day_task.py`
