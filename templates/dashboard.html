@@ -72,7 +72,7 @@
           <div class="window-actions">
             <form class="mini-form" action="{{ url_for('add_expense') }}" method="post" data-offline-queue="expense">
               <input type="hidden" name="category_id" value="{{ c.id }}">
-              <input type="number" name="amount" placeholder="Rp" required>
+              <input type="text" name="amount" data-money-input placeholder="Rp" required>
               <button type="submit">SPEND</button>
             </form>
           </div>
@@ -80,7 +80,7 @@
             <summary>EDIT</summary>
             <form class="mini-form category-edit-form" action="{{ url_for('edit_category', category_id=c.id) }}" method="post" style="flex-wrap:wrap; gap:8px; margin-top:8px;">
               <input type="text" name="name" value="{{ c.name }}" required style="flex:2; min-width:120px;">
-              <input type="number" name="budget_amount" value="{{ c.budget }}" required style="flex:1; min-width:100px;">
+              <input type="text" name="budget_amount" data-money-input value="{{ c.budget }}" required style="flex:1; min-width:100px;">
               <select name="period" class="period-select" style="flex:1; min-width:110px;">
                 <option value="monthly" {{ 'selected' if c.period == 'monthly' else '' }}>Monthly</option>
                 <option value="weekly" {{ 'selected' if c.period == 'weekly' else '' }}>Weekly (resets Mon)</option>
@@ -181,7 +181,7 @@
     <div class="section-title"><span class="num">04</span>ADD SCHEDULED CATEGORY</div>
     <form action="{{ url_for('add_category') }}" method="post" class="mini-form" data-offline-queue="category" style="max-width:600px; flex-wrap:wrap; gap:10px;">
       <input type="text" name="name" placeholder="Category name" required style="flex:2; min-width:160px;">
-      <input type="number" name="budget_amount" placeholder="Budget (Rp)" required style="flex:1; min-width:120px;">
+      <input type="text" name="budget_amount" data-money-input placeholder="Budget (Rp)" required style="flex:1; min-width:120px;">
       <select name="period" class="period-select" style="flex:1; min-width:120px;">
         <option value="monthly" selected>Monthly</option>
         <option value="weekly">Weekly (resets Mon)</option>
@@ -195,7 +195,7 @@
     <div class="section-title"><span class="num">05</span>LOG ONE-OFF EXPENSE</div>
     <form action="{{ url_for('add_custom_expense') }}" method="post" class="mini-form" data-offline-queue="custom_expense" style="max-width:420px; flex-wrap:wrap; gap:10px;">
       <input type="text" name="label" placeholder="Label (optional)" style="flex:2; min-width:160px;">
-      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
       <button type="submit" style="flex:0 0 auto;">ADD EXPENSE</button>
     </form>
   </section>

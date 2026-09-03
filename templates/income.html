@@ -58,7 +58,7 @@
     <div class="section-title"><span class="num">02</span>ADD SCHEDULED INCOME</div>
     <form action="{{ url_for('add_income_source') }}" method="post" class="mini-form" data-offline-queue="income_source" style="max-width:520px; flex-wrap:wrap; gap:10px;">
       <input type="text" name="name" placeholder="Source name" required style="flex:2; min-width:160px;">
-      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
       <input type="number" name="due_day" placeholder="Arrival day (1-28, optional)" min="1" max="28" style="flex:1; min-width:160px;">
       <button type="submit" style="flex:0 0 auto;">ADD SOURCE</button>
     </form>
@@ -68,7 +68,7 @@
     <div class="section-title"><span class="num">03</span>ADD CUSTOM INCOME</div>
     <form action="{{ url_for('add_custom_income') }}" method="post" class="mini-form" data-offline-queue="custom_income" style="max-width:420px; flex-wrap:wrap; gap:10px;">
       <input type="text" name="label" placeholder="Label (optional)" style="flex:2; min-width:160px;">
-      <input type="number" name="amount" placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
+      <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" required style="flex:1; min-width:120px;">
       <button type="submit" style="flex:0 0 auto;">ADD INCOME</button>
     </form>
   </section>

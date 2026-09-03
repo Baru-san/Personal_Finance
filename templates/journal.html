@@ -54,7 +54,7 @@
         {% if t['source'] == 'transaction' %}
         <form class="mini-form" action="{{ url_for('edit_journal_entry', entry_id=t['id']) }}" method="post">
           <input type="hidden" name="month" value="{{ selected_month }}">
-          <input type="number" name="amount" value="{{ t['amount'] }}" min="1" required style="width:110px;">
+          <input type="text" name="amount" data-money-input value="{{ t['amount'] }}" required style="width:110px;">
           <input type="text" name="note" value="{{ t['note'] or '' }}" placeholder="Note" style="width:160px;">
           <button type="submit">SAVE</button>
         </form>

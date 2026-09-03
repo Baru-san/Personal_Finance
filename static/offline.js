@@ -297,3 +297,47 @@ document.addEventListener('DOMContentLoaded', function () {
   refreshQueueBanner();
   replayQueue();
 });
+
+// ============================================================
+// Money input formatting — any input marked data-money-input shows
+// "." thousand separators as the user types (100000 -> 100.000). The
+// input itself loses its name attribute and a paired hidden field
+// (created here) carries the real name and the plain digit string, so
+// every consumer downstream (normal submit, offline.js's own
+// FormData/fetch queueing above) keeps receiving the unformatted
+// integer the server expects.
+// ============================================================
+
+function setMoneyValue(input, hidden, digits) {
+  hidden.value = digits;
+  input.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+function initMoneyInputs() {
+  document.querySelectorAll('[data-money-input]').forEach(function (input) {
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.name = input.getAttribute('name');
+    input.removeAttribute('name');
+    input.setAttribute('inputmode', 'numeric');
+    input.setAttribute('autocomplete', 'off');
+    input.insertAdjacentElement('afterend', hidden);
+
+    setMoneyValue(input, hidden, input.value.replace(/\D/g, ''));
+
+    input.addEventListener('input', function () {
+      var digitsBeforeCaret = input.value.slice(0, input.selectionStart).replace(/\D/g, '').length;
+      setMoneyValue(input, hidden, input.value.replace(/\D/g, ''));
+
+      var seen = 0, pos = input.value.length;
+      for (var i = 0; i < input.value.length; i++) {
+        if (/\d/.test(input.value[i])) seen++;
+        if (seen === digitsBeforeCaret) { pos = i + 1; break; }
+      }
+      if (digitsBeforeCaret === 0) pos = 0;
+      input.setSelectionRange(pos, pos);
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', initMoneyInputs);
