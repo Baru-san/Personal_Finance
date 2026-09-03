@@ -106,7 +106,9 @@ logic → routes.
   always counted) `+ custom_income_for_range(db, start, end)` (this month's
   `custom_incomes` only). `available = income - total_scheduled` (sum of
   category budgets) `- pot_deposit_for_range(...)` (money already set aside by
-  hand this month), computed in `build_dashboard_data()`.
+  hand this month) `- custom_expense_for_range(...)` (this month's one-off
+  expenses, since they were never reserved in `total_scheduled`), computed in
+  `build_dashboard_data()`.
 - **Unified entry feed**: `ENTRY_UNION_SQL` (parameterized with optional date
   filters) is the shared building block behind `ALL_ENTRIES_SQL` (recent
   activity, all-time) and `LEDGER_ENTRIES_SQL` (a single month) — both `UNION
@@ -130,13 +132,19 @@ logic → routes.
 - **Dashboard aggregation** (`build_dashboard_data()`) computes per-category
   spend/percent/status (`OVER BUDGET`, `COMPLETE`, `DUE TODAY`, `UNTOUCHED`,
   `ON TRACK`) and two different top-line figures that are easy to confuse:
-  `available = income - total_scheduled - manual_saved` (the balance hero —
-  *plan* money, reserving every category's full budget whether or not it has
-  been spent) and `cash_left = income - total_spent - manual_saved` (section
-  02's "Money Left" card — *actual* money, subtracting only what really left
-  the wallet: `total_spent`, i.e. this month's `spend` transactions plus
-  `custom_expenses`, and pot deposits made by hand). `cash_left` can go
-  negative, and the template adds `.pot-value.neg` to render it red.
+  `available = income - total_scheduled - manual_saved - custom_expense`
+  (the balance hero — *plan* money, reserving every category's full budget
+  whether or not it has been spent, but still docking one-off spending that
+  was never reserved in any category's budget) and
+  `cash_left = income - total_spent - manual_saved` (section 02's "Money
+  Left" card — *actual* money, subtracting only what really left the wallet:
+  `total_spent`, i.e. this month's `spend` transactions plus
+  `custom_expenses`, and pot deposits made by hand). Both figures include
+  this month's `custom_expense_for_range(...)` total, just via different
+  terms (`custom_expense` directly in `available`, folded into `total_spent`
+  for `cash_left`) — it's never double-subtracted since `total_scheduled`
+  never counted it in the first place. `cash_left` can go negative, and the
+  template adds `.pot-value.neg` to render it red.
 
 ## Authentication
 

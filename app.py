@@ -795,7 +795,8 @@ def build_dashboard_data():
     custom_income = custom_income_for_range(db, start, end)
     income = scheduled_income + custom_income
     manual_saved = pot_deposit_for_range(db, start, end)
-    available = income - total_scheduled - manual_saved
+    custom_expense = custom_expense_for_range(db, start, end)
+    available = income - total_scheduled - manual_saved - custom_expense
 
     recent = db.execute(ALL_ENTRIES_SQL + " LIMIT 8").fetchall()
 
@@ -805,12 +806,14 @@ def build_dashboard_data():
         """SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
            WHERE kind = 'spend' AND created_at >= ? AND created_at < ?""",
         (start, end),
-    ).fetchone()["total"] + custom_expense_for_range(db, start, end)
+    ).fetchone()["total"] + custom_expense
 
     # What's actually left in hand, as opposed to `available` above: that one
     # reserves the full scheduled budget whether or not it has been spent yet,
     # while this subtracts only money that has really left the wallet — real
-    # spending plus anything banked into a pot by hand this month.
+    # category spending plus anything banked into a pot by hand this month
+    # (custom_expense is already counted in both, since it was never part of
+    # a category budget to reserve).
     cash_left = income - total_spent - manual_saved
 
     trend = spending_trend_chart(db, today, start, end)
@@ -1216,7 +1219,8 @@ def savings():
         for c in db.execute("SELECT budget_amount, period FROM categories")
     )
     manual_saved = pot_deposit_for_range(db, month_start, month_end_excl)
-    available = income - scheduled_total - manual_saved
+    custom_expense = custom_expense_for_range(db, month_start, month_end_excl)
+    available = income - scheduled_total - manual_saved - custom_expense
 
     deposits = db.execute(
         """SELECT d.id AS id, d.created_at AS created_at, d.amount AS amount,
