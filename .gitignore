@@ -10,13 +10,18 @@ ledger.db-journal
 ledger.db-wal
 ledger.db-shm
 
+# Dummy/test database (regenerate with seed_dummy_db.py)
+dummy.db*
+
 # Server console output — in normal (password-enabled) mode the first-run
 # console prints the one-time /setup?token=..., so this must never be committed.
 server.log
 *.log
 
-# Local Claude Code settings
+# Local Claude Code settings and per-session worktrees (the latter is a full
+# nested checkout — must never be committed from the main worktree).
 .claude/settings.local.json
+.claude/worktrees/
 
 __pycache__/
 *.pyc

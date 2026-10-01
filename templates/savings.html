@@ -26,13 +26,17 @@
     <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
   </div>
 
+  {% include '_flash.html' %}
+
   <section class="balance-hero">
     <div class="prompt-line"><span>user@ledger</span>:~$ show savings --pots</div>
     <div class="balance-label">Auto-Saved (Unspent)</div>
     <div class="balance-value">{{ pots[2]['balance'] | rp if pots|length > 2 else '0' }}</div>
     <div class="balance-sub">
-      Weekly categories sweep leftovers every <span class="up">Monday</span> ({{ next_monday_label }}) &nbsp;·&nbsp;
-      Monthly categories sweep leftovers on the <span class="up">1st</span> ({{ next_month_first_label }})
+      Completed weeks bank every <span class="up">Monday</span> and months on the <span class="up">1st</span>
+      (next: {{ next_monday_label }} / {{ next_month_first_label }}) &nbsp;·&nbsp;
+      <span class="up">Run Daily Close any time</span> — missed windows catch up
+      &nbsp;·&nbsp; <a href="#move-money" class="income-link">Allocate savings →</a>
     </div>
   </section>
 
@@ -48,42 +52,78 @@
     </div>
   </section>
 
-  <section class="section">
-    <div class="section-title"><span class="num">02</span>SET ASIDE CURRENT MONEY</div>
+  <section class="section" id="move-money">
+    <div class="section-title"><span class="num">02</span>MOVE MONEY</div>
     <div class="balance-sub" style="margin-bottom:14px;">
       Unallocated right now: <span class="up">{{ available | rp }}</span>
       {% if manual_saved %}&nbsp;·&nbsp; already set aside this month: <span class="up">{{ manual_saved | rp }}</span>{% endif %}
+      {% if withdrawn %}&nbsp;·&nbsp; pulled back this month: <span class="up">{{ withdrawn | rp }}</span>{% endif %}
     </div>
-    <form action="{{ url_for('add_pot_deposit') }}" method="post" class="mini-form" style="max-width:620px; flex-wrap:wrap; gap:10px;">
-      <select name="pot_id" style="flex:1; min-width:160px;">
-        {% for p in pots %}
-        <option value="{{ p['id'] }}">{{ p['name'] }}</option>
-        {% endfor %}
-      </select>
-      <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" value="{{ available if available > 0 else '' }}" required style="flex:1; min-width:120px;">
-      <input type="text" name="note" placeholder="Note (optional)" style="flex:2; min-width:160px;">
-      <button type="submit" style="flex:0 0 auto;">SAVE TO POT</button>
-    </form>
+
+    <div class="move-forms">
+      <form action="{{ url_for('add_pot_deposit') }}" method="post" class="mini-form" style="flex-wrap:wrap; gap:10px;">
+        <div class="move-form-title">SET ASIDE UNALLOCATED CASH</div>
+        <select name="pot_id" style="flex:1; min-width:150px;">
+          {% for p in pots %}
+          <option value="{{ p['id'] }}">{{ p['name'] }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" value="{{ available if available > 0 else '' }}" required style="flex:1; min-width:110px;">
+        <input type="text" name="note" placeholder="Note (optional)" style="flex:2; min-width:140px;">
+        <button type="submit" style="flex:0 0 auto;">SAVE TO POT</button>
+      </form>
+
+      <form action="{{ url_for('allocate_savings') }}" method="post" class="mini-form" style="flex-wrap:wrap; gap:10px;">
+        <div class="move-form-title">ALLOCATE A POT</div>
+        <select name="from_pot_id" style="flex:1; min-width:150px;">
+          {% for p in pots %}
+          <option value="{{ p['id'] }}" {{ 'selected' if p['name'] == 'Auto-saved (Unspent)' else '' }}>{{ p['name'] }}</option>
+          {% endfor %}
+        </select>
+        <span class="move-arrow">→</span>
+        <select name="to_pot_id" style="flex:1; min-width:150px;">
+          <option value="">← Available / remaining balance</option>
+          {% for p in pots %}
+          <option value="{{ p['id'] }}">{{ p['name'] }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="amount" data-money-input placeholder="Amount (Rp)" required style="flex:1; min-width:110px;">
+        <input type="text" name="note" placeholder="Note (optional)" style="flex:2; min-width:140px;">
+        <button type="submit" style="flex:0 0 auto;">MOVE</button>
+      </form>
+    </div>
 
     <div class="log" style="margin-top:18px;">
-      {% for d in deposits %}
+      {% for m in movements %}
       <div class="log-entry">
         <div class="left">
-          <div class="ts">{{ d['created_at'][5:10] }}</div>
+          <div class="ts">{{ m['created_at'][5:10] }}</div>
           <div class="msg">
-            <span class="tag save">[SET ASIDE]</span>
-            {{ d['pot_name'] }}{% if d['note'] %} — {{ d['note'] }}{% endif %}
+            {% if m['kind'] == 'deposit' %}
+            <span class="tag save">[SET ASIDE]</span> → {{ m['pot_name'] }}
+            {% elif m['kind'] == 'withdraw' %}
+            <span class="tag income">[WITHDRAW]</span> {{ m['pot_name'] }} → AVAILABLE
+            {% else %}
+            <span class="tag save">[TRANSFER]</span> {{ m['pot_name'] }} → {{ m['counterpart_name'] }}
+            {% endif %}
+            {% if m['note'] %} — {{ m['note'] }}{% endif %}
           </div>
         </div>
-        <div class="amt pos">
-          +{{ d['amount'] | rp }}
-          <form action="{{ url_for('delete_pot_deposit', deposit_id=d['id']) }}" method="post" style="display:inline;">
-            <button type="submit" class="logout-btn" title="Undo this deposit">UNDO</button>
+        <div class="amt {{ 'neg' if m['kind'] == 'withdraw' else 'pos' }}">
+          {{ '-' if m['kind'] == 'withdraw' else '+' }}{{ m['amount'] | rp }}
+          {% if m['source'] == 'deposit' %}
+          <form action="{{ url_for('delete_pot_deposit', deposit_id=m['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="logout-btn" title="Undo this set-aside">UNDO</button>
           </form>
+          {% else %}
+          <form action="{{ url_for('delete_pot_movement', movement_id=m['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="logout-btn" title="Undo this movement">UNDO</button>
+          </form>
+          {% endif %}
         </div>
       </div>
       {% else %}
-      <div class="empty">Nothing set aside by hand yet. Pick a pot above to bank money you already have.</div>
+      <div class="empty">No movements yet. Bank cash into a pot, or move savings between pots above.</div>
       {% endfor %}
     </div>
   </section>

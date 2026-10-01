@@ -26,12 +26,14 @@
     <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
   </div>
 
+  {% include '_flash.html' %}
+
   <section class="balance-hero">
     <div class="prompt-line"><span>user@ledger</span>:~$ show balance --month=current</div>
     <div class="balance-label">Available This Month</div>
     <div class="balance-value">{{ available | rp }}</div>
     <div class="balance-sub">
-      Income {{ income | rp }} — Scheduled {{ total_scheduled | rp }}{% if manual_saved %} — Set aside {{ manual_saved | rp }}{% endif %} &nbsp;
+      Income {{ income | rp }} — Scheduled {{ total_scheduled | rp }}{% if manual_saved %} — Set aside {{ manual_saved | rp }}{% endif %}{% if withdrawn %} + Withdrawn {{ withdrawn | rp }}{% endif %} &nbsp;
       <span class="up">{{ funded_count }} categories funded</span>
       &nbsp;·&nbsp;
       <a href="{{ url_for('income') }}" class="income-link">Manage income →</a>
@@ -111,7 +113,7 @@
       <div class="pot">
         <div class="pot-value{% if cash_left < 0 %} neg{% endif %}">{{ cash_left | rp }}</div>
         <div class="pot-label">Money Left</div>
-        <div class="pot-note">Income minus spending{% if manual_saved %} and {{ manual_saved | rp }} set aside{% endif %}</div>
+        <div class="pot-note">Income minus spending{% if manual_saved %} and {{ manual_saved | rp }} set aside{% endif %}{% if withdrawn %} plus {{ withdrawn | rp }} withdrawn{% endif %}</div>
       </div>
       <div class="pot">
         <div class="pot-value">{{ total_scheduled | rp }}</div>
@@ -133,12 +135,14 @@
         <text class="trend-axis-label" x="{{ trend.plot_left - 8 }}" y="{{ trend.plot_top }}" text-anchor="end" dy="3">{{ trend.y_max | rp }}</text>
         {% if trend.points %}
         <text class="trend-axis-label" x="{{ trend.plot_left }}" y="{{ trend.h - 6 }}" text-anchor="start">{{ trend.points[0].label }}</text>
-        <text class="trend-axis-label" x="{{ trend.plot_right }}" y="{{ trend.h - 6 }}" text-anchor="end">{{ trend.points[-1].label }}</text>
+        <text class="trend-axis-label" x="{{ trend.plot_right }}" y="{{ trend.h - 6 }}" text-anchor="end">{{ trend.x_last_label }}</text>
         <path class="trend-area" d="{{ trend.area_path }}"></path>
         <polyline class="trend-line" points="{{ trend.polyline }}"></polyline>
         {% for p in trend.points %}
         <circle class="trend-hit" cx="{{ p.px }}" cy="{{ p.py }}" r="10"></circle>
         {% endfor %}
+        <line class="trend-today-line" x1="{{ trend.points[-1].px }}" x2="{{ trend.points[-1].px }}" y1="{{ trend.plot_top }}" y2="{{ trend.plot_bottom }}"></line>
+        <text class="trend-today-label" x="{{ trend.points[-1].px }}" y="{{ trend.plot_top - 4 }}" text-anchor="middle">TODAY</text>
         <circle class="trend-end-dot" cx="{{ trend.points[-1].px }}" cy="{{ trend.points[-1].py }}" r="5"></circle>
         <text class="trend-end-label" x="{{ trend.points[-1].px - 8 }}" y="{{ trend.points[-1].py - 10 }}" text-anchor="end">{{ trend.points[-1].cumulative | rp }}</text>
         <line id="trend-crosshair" class="trend-crosshair" x1="0" x2="0" y1="{{ trend.plot_top }}" y2="{{ trend.plot_bottom }}"></line>

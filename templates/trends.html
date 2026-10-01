@@ -26,9 +26,11 @@
     <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
   </div>
 
+  {% include '_flash.html' %}
+
   <section class="balance-hero">
-    <div class="prompt-line"><span>user@ledger</span>:~$ show trends --months=12</div>
-    <div class="balance-label">12-Month Net Cash Flow</div>
+    <div class="prompt-line"><span>user@ledger</span>:~$ show trends --since=2026-09</div>
+    <div class="balance-label">Net Cash Flow</div>
     <div class="balance-value {{ 'neg' if cash_flow.net_total < 0 else '' }}">{{ cash_flow.net_total | rp }}</div>
     <div class="balance-sub">
       Income {{ cash_flow.income_total | rp }} &nbsp;·&nbsp; Spent {{ cash_flow.spend_total | rp }}
@@ -36,7 +38,7 @@
   </section>
 
   <section class="section">
-    <div class="section-title"><span class="num">01</span>NET CASH FLOW (LAST 12 MONTHS)</div>
+    <div class="section-title"><span class="num">01</span>NET CASH FLOW{% if trend_range_label %} ({{ trend_range_label | upper }}){% endif %}</div>
     <div class="pots">
       <div class="pot">
         <div class="pot-value">{{ cash_flow.income_total | rp }}</div>
@@ -113,7 +115,7 @@
         <div class="tt-day"></div>
       </div>
     </div>
-    <div class="chart-note">Running total of unspent budget swept into the "Auto-saved (Unspent)" pot — tracks that pot's source transactions, not manual pot edits, within the 1-year retention window.</div>
+    <div class="chart-note">Running total of unspent budget swept into the "Auto-saved (Unspent)" pot — tracks that pot's source transactions, not manual pot edits, since September 2026.</div>
   </section>
 
   <div class="actions">
@@ -122,7 +124,7 @@
 
   <footer>
     <div>LEDGER.SYS — FLASK + SQLITE</div>
-    <div>TRAILING 12 MONTHS</div>
+    <div>{% if trend_range_label %}SHOWING {{ trend_range_label | upper }}{% else %}TRAILING 12 MONTHS{% endif %}</div>
   </footer>
 
 <script>
