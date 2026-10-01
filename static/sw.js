@@ -10,7 +10,7 @@
 //     directly; static/offline.js is what queues them when that fails.
 //
 // Bump CACHE_VERSION to invalidate everything precached below.
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v6';
 const CACHE_NAME = 'ledger-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [

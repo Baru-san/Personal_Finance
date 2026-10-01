@@ -15,9 +15,19 @@ below) — no per-user accounts.
 pip install -r requirements.txt
 python app.py          # runs dev server on 0.0.0.0:5000, and calls init_db()
                         # to create ledger.db on first run
+python -m unittest discover -s tests -v   # test suite
 ```
 
-There is no test suite, linter, or build step in this repo.
+The tests live in `tests/test_app.py` and use only the stdlib `unittest`
+runner plus Flask's test client — no pytest, no extra dependencies. They import
+`app.py` against a throwaway temp database (set via `DB_PATH` *before* the
+import, since importing app runs `init_db()`), so they never touch the real
+`ledger.db`. There is no linter or build step.
+
+For manual UI testing without real data, `seed_dummy_db.py` writes sample
+rows (categories, spends across recent months, pots/movements) to an ignored
+`dummy.db` — it refuses to run against `ledger.db`. Explore it with
+`DB_PATH=dummy.db LEDGER_DISABLE_AUTH=1 python app.py`.
 
 Relevant environment variables (all optional — see Authentication below for
 what happens when they're unset):
@@ -63,13 +73,22 @@ logic → routes.
   the pots seed only fires on an empty table). `categories` and `income_sources` intentionally
   start empty — the user adds their own via the UI, nothing is pre-seeded.
 - **Schema** (SQLite, `ledger.db`): `categories` (budget_amount, optional
-  `due_day` 1–28 for recurring bills), `transactions` (`kind` is `'spend'` or
+  `due_day` 1–28 for recurring bills, `period` weekly/monthly, and `created_at`
+  — when the category was added, which bounds catch-up sweeps; legacy rows
+  created before the column existed stay NULL), `transactions` (`kind` is `'spend'` or
   `'auto_save'`, `amount` always stored positive, `created_at` is an ISO
   string used for month-range filtering, FK to `categories` with
-  `ON DELETE CASCADE`), `pots` (named savings buckets), `pot_deposits`
+  `ON DELETE CASCADE`; `sweep_key` is set only on `auto_save` rows to the swept
+  window's start date and backs a partial unique index on
+  `(category_id, sweep_key)` — see the auto-save rule below), `pots` (named
+  savings buckets), `pot_deposits`
   (manual "set aside" deposits into a pot — pot_id/amount/optional note/
   `created_at`; the audit trail behind `pots.balance` for money moved by hand
-  rather than swept), `income_sources`
+  rather than swept), `pot_movements` (hand-made pot-to-pot transfers and
+  pot-to-available withdrawals — from_pot_id/optional to_pot_id/amount/note/
+  `created_at`, where a NULL `to_pot_id` means the money went back to
+  available/remaining balance; `amount` is always positive, and both pot
+  balances and the source row move together), `income_sources`
   (recurring income templates — name/amount/optional `due_day`, counted every
   month regardless of `due_day`; `due_day` is informational only, mirroring
   how `categories.due_day` works), `custom_incomes` (one-off income entries —
@@ -83,14 +102,38 @@ logic → routes.
 - **Month logic**: `month_bounds()` gives the current calendar month's
   `[start, end)` ISO date range, used to filter transactions by
   `created_at`. `available_months()` / `get_ledger_for_month()` support the
-  `/ledger` history view, keyed by `'YYYY-MM'` strings.
+  `/ledger` history view, keyed by `'YYYY-MM'` strings. `spending_trend_chart()`
+  positions its elapsed days against the *whole* current month via
+  `line_chart_geometry(..., x_span=days_in_month, x_key="day")`, so the line
+  ends at today's true spot instead of stretching edge to edge; the other line
+  chart (`savings_trajectory_chart`) leaves `x_span` unset and stays evenly
+  index-spaced. Both Trends-page charts (`cash_flow_chart` and
+  `savings_trajectory_chart`) take their month list from `trend_months()` —
+  `TREND_START_MONTH` through the current month — rather than a rolling
+  `trailing_months(12)`, so they grow instead of shifting a month off the left
+  edge; the Savings page's "Saved by Month" chart keeps using
+  `trailing_months(12)`, and retention is unchanged.
 - **Auto-save-on-unspent rule**: `/close-day` (POST) is the core domain
-  action — for every category whose `due_day` matches today, any leftover
-  budget (`budget_amount - spent`) becomes an `auto_save` transaction and is
-  added to the "Auto-saved (Unspent)" pot. It also prunes transactions older
-  than 12 months (`prune_old_transactions`). This is meant to run once daily
-  unattended (e.g. a cron hitting the endpoint) — see README for the
-  Fly.io/cron setup — not just via the dashboard's "Run Daily Close" button.
+  action — for each completed weekly/monthly window, any leftover budget
+  (`budget_amount - spent`) becomes an `auto_save` transaction added to the
+  "Auto-saved (Unspent)" pot. It also prunes transactions older than 12 months
+  (`prune_old_transactions`). Meant to run once daily unattended (e.g. a cron
+  hitting the endpoint) — see README for the Fly.io/cron setup — not just via
+  the dashboard's "Run Daily Close" button.
+  It is **catch-up safe** (`run_close_day()`): on *any* day it banks the most
+  recent completed window and any earlier ones that were missed, so a forgotten
+  Monday/1st doesn't lose a period. The look-back is bounded below by the
+  category's `created_at` (never bank a window that started before it existed)
+  and by the 12-month retention floor. Legacy categories with no `created_at`
+  keep the old single-window behavior, so deploying this can't retroactively
+  re-bank their history. `sweep_unspent()` is race-safe: its `already_swept`
+  SELECT is only a fast path, and the real guard is the partial unique index on
+  `(category_id, sweep_key)` (with `sweep_key` = the window's start date), so
+  two overlapping `/close-day` calls — cron plus the manual button, a retry,
+  or two threads — can only bank a given window once. Catch-up sweeps use
+  `strict_key=True` (match on the exact `sweep_key`); the loose
+  `created_at >= window_start` check is kept only for the legacy path, whose
+  rows predate `sweep_key`.
 - **Manual pot deposits**: the Savings tab's "Set aside current money" form
   (`POST /savings/deposit`) banks cash you already have into any pot — it
   inserts a `pot_deposits` row *and* adds to that pot's stored `balance`, the
@@ -102,12 +145,27 @@ logic → routes.
   `pot_deposit_for_range()` sums the current month's deposits and is subtracted
   from `available` on both the dashboard and the Savings tab, so money set aside
   stops being counted as unallocated.
+- **Allocating savings**: `POST /savings/allocate` moves money out of a pot,
+  either into another pot (`to_pot_id` set — a transfer, which only reshuffles
+  `pots.balance` and leaves the dashboard untouched) or back to available
+  (`to_pot_id` blank — a withdrawal, which also raises `available`/`cash_left`
+  via `pot_withdrawn_for_range`). `apply_pot_movement()` is the one helper: it
+  refuses to overdraw the source pot, refuses a pot-to-itself move, and only
+  moves balances when the `pot_movements` insert actually happened
+  (`cur.rowcount`), so a replayed `client_id` can't double-move money.
+  `POST /savings/movement/<id>/delete` undoes one, re-crediting the source pot
+  and (for a transfer) debiting the destination. The Savings tab's merged
+  "POT MOVEMENTS" log is `POT_MOVEMENT_LOG_SQL`, a `UNION ALL` of
+  `pot_deposits` (set-aside) and `pot_movements` (transfer/withdraw) tagged
+  with a `source` column so each row links to the right UNDO route.
 - **Income**: `income = total_scheduled_income(db)` (sum of all `income_sources`,
   always counted) `+ custom_income_for_range(db, start, end)` (this month's
   `custom_incomes` only). `available = income - total_scheduled` (sum of
   category budgets) `- pot_deposit_for_range(...)` (money already set aside by
-  hand this month) `- custom_expense_for_range(...)` (this month's one-off
-  expenses, since they were never reserved in `total_scheduled`), computed in
+  hand this month) `+ pot_withdrawn_for_range(...)` (pot -> available
+  withdrawals this month, money pulled back out of savings) `-
+  custom_expense_for_range(...)` (this month's one-off expenses, since they
+  were never reserved in `total_scheduled`), computed in
   `build_dashboard_data()`.
 - **Unified entry feed**: `ENTRY_UNION_SQL` (parameterized with optional date
   filters) is the shared building block behind `ALL_ENTRIES_SQL` (recent
@@ -132,13 +190,13 @@ logic → routes.
 - **Dashboard aggregation** (`build_dashboard_data()`) computes per-category
   spend/percent/status (`OVER BUDGET`, `COMPLETE`, `DUE TODAY`, `UNTOUCHED`,
   `ON TRACK`) and two different top-line figures that are easy to confuse:
-  `available = income - total_scheduled - manual_saved - custom_expense`
-  (the balance hero — *plan* money, reserving every category's full budget
-  whether or not it has been spent, but still docking one-off spending that
-  was never reserved in any category's budget) and
-  `cash_left = income - total_spent - manual_saved` (section 02's "Money
-  Left" card — *actual* money, subtracting only what really left the wallet:
-  `total_spent`, i.e. this month's `spend` transactions plus
+  `available = income - total_scheduled - manual_saved + withdrawn -
+  custom_expense` (the balance hero — *plan* money, reserving every category's
+  full budget whether or not it has been spent, but still docking one-off
+  spending that was never reserved in any category's budget) and
+  `cash_left = income - total_spent - manual_saved + withdrawn` (section 02's
+  "Money Left" card — *actual* money, subtracting only what really left the
+  wallet: `total_spent`, i.e. this month's `spend` transactions plus
   `custom_expenses`, and pot deposits made by hand). Both figures include
   this month's `custom_expense_for_range(...)` total, just via different
   terms (`custom_expense` directly in `available`, folded into `total_spent`
@@ -195,6 +253,14 @@ losing unsynced writes on logout would be worse than a stale cache).
   framework or build pipeline.
 - Templates read row data as `dict`-style (`t['field']`) or attribute-style
   (`c.field`) interchangeably — both work because of `sqlite3.Row`.
+- **Flash feedback**: write routes call `flash(msg, "success"|"error"|"info")`
+  and redirect, and `templates/_flash.html` (included by every
+  shared-nav page) renders and consumes them via `get_flashed_messages`. Used
+  by the savings flows (deposit/allocate/undo) and `/close-day`, whose rejections
+  would otherwise be a silent redirect. The offline-queued add forms
+  (`data-offline-queue`) deliberately don't flash — those POSTs can be replayed
+  by `offline.js` without a page load, so the message would pile up in the
+  session cookie instead of being shown.
 
 ## Hosting on PythonAnywhere
 

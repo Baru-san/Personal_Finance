@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
-from flask import Flask, render_template, request, redirect, url_for, g, send_from_directory, session, abort
+from flask import Flask, render_template, request, redirect, url_for, g, send_from_directory, session, abort, flash
 from flask_compress import Compress
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -214,7 +214,7 @@ def close_db(exception=None):
 # below in the client_id migration loop — safe only because every name here
 # is a hardcoded literal, never runtime input. Must never be extended with a
 # table name that comes from a request.
-MIGRATED_TABLES = ("categories", "transactions", "income_sources", "custom_incomes", "custom_expenses", "pot_deposits")
+MIGRATED_TABLES = ("categories", "transactions", "income_sources", "custom_incomes", "custom_expenses", "pot_deposits", "pot_movements")
 
 
 def init_db():
@@ -229,7 +229,8 @@ def init_db():
             due_day INTEGER,                     -- day of month this is due (1-28), NULL = flexible or weekly
             sort_order INTEGER DEFAULT 0,
             period TEXT NOT NULL DEFAULT 'monthly', -- 'weekly' or 'monthly'
-            client_id TEXT                       -- see offline write-queue note below
+            client_id TEXT,                      -- see offline write-queue note below
+            created_at TEXT                      -- when the category was added; bounds catch-up sweeps
         );
 
         CREATE TABLE IF NOT EXISTS transactions (
@@ -239,7 +240,8 @@ def init_db():
             kind TEXT NOT NULL,                  -- 'spend' or 'auto_save'
             note TEXT,
             created_at TEXT NOT NULL,
-            client_id TEXT
+            client_id TEXT,
+            sweep_key TEXT                       -- auto_save only: the swept window's start date
         );
 
         CREATE TABLE IF NOT EXISTS pots (
@@ -281,6 +283,16 @@ def init_db():
             created_at TEXT NOT NULL,
             client_id TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS pot_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_pot_id INTEGER NOT NULL REFERENCES pots(id) ON DELETE CASCADE,
+            to_pot_id INTEGER REFERENCES pots(id) ON DELETE CASCADE, -- NULL = available/remaining balance
+            amount INTEGER NOT NULL,             -- always positive, money moved by hand out of a pot
+            note TEXT,
+            created_at TEXT NOT NULL,
+            client_id TEXT
+        );
         """
     )
 
@@ -290,6 +302,11 @@ def init_db():
     existing_columns = {row["name"] for row in db.execute("PRAGMA table_info(categories)")}
     if "period" not in existing_columns:
         db.execute("ALTER TABLE categories ADD COLUMN period TEXT NOT NULL DEFAULT 'monthly'")
+    # Categories created before this column existed stay NULL and are treated as
+    # legacy: /close-day only ever sweeps their most recent completed window
+    # (the old behavior), never retroactively.
+    if "created_at" not in existing_columns:
+        db.execute("ALTER TABLE categories ADD COLUMN created_at TEXT")
 
     # Offline write queue: static/offline.js tags each queued POST with a
     # client-generated UUID so a replayed submission (page reload before the
@@ -307,6 +324,18 @@ def init_db():
             f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_client_id "
             f"ON {table}(client_id) WHERE client_id IS NOT NULL"
         )
+
+    # A sweep is identified by (category, window start), so /close-day can be
+    # called repeatedly (cron + the dashboard button, retries, or two requests
+    # racing) without banking the same window twice: whichever INSERT wins the
+    # partial unique index credits the pot, the rest are ON CONFLICT no-ops.
+    tx_cols = {row["name"] for row in db.execute("PRAGMA table_info(transactions)")}
+    if "sweep_key" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN sweep_key TEXT")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_sweep "
+        "ON transactions(category_id, sweep_key) WHERE sweep_key IS NOT NULL"
+    )
 
     cur = db.execute("SELECT COUNT(*) AS c FROM pots")
     if cur.fetchone()["c"] == 0:
@@ -429,6 +458,18 @@ def pot_deposit_for_range(db, start, end):
     return row["total"]
 
 
+def pot_withdrawn_for_range(db, start, end):
+    """Money pulled back out of a pot into available cash this period (pot ->
+    available movements). Unlike pot_deposit_for_range, this is added to
+    'available' — it is money returning to this month's unallocated cash."""
+    row = db.execute(
+        """SELECT COALESCE(SUM(amount), 0) AS total FROM pot_movements
+           WHERE to_pot_id IS NULL AND created_at >= ? AND created_at < ?""",
+        (start, end),
+    ).fetchone()
+    return row["total"]
+
+
 def auto_save_for_range(db, start, end):
     row = db.execute(
         """SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
@@ -461,10 +502,16 @@ CHART_W, CHART_H = 640, 200
 CHART_PAD = {"l": 50, "r": 16, "t": 16, "b": 26}
 
 
-def line_chart_geometry(points, value_key="cumulative", y_max=None):
+def line_chart_geometry(points, value_key="cumulative", y_max=None, x_span=None, x_key="day"):
     """Project a list of point-dicts onto SVG plot coordinates (px/py) and build a
     polyline + filled area path. Mutates and returns `points`; each dict needs at
-    least `value_key`. Shared by every line/area chart (spend trend, savings trajectory)."""
+    least `value_key`. Shared by every line/area chart (spend trend, savings trajectory).
+
+    By default points are spaced evenly by index — correct when every slot is
+    present (the 12-month trajectory). Pass `x_span` to pin each point by a
+    numeric `x_key` instead, so the series occupies its true position within a
+    larger range: the day-by-day trend uses this to lay a month's elapsed days
+    across the whole calendar month rather than stretching them edge to edge."""
     plot_w = CHART_W - CHART_PAD["l"] - CHART_PAD["r"]
     plot_h = CHART_H - CHART_PAD["t"] - CHART_PAD["b"]
     plot_bottom = CHART_PAD["t"] + plot_h
@@ -474,7 +521,10 @@ def line_chart_geometry(points, value_key="cumulative", y_max=None):
 
     n = len(points)
     for i, p in enumerate(points):
-        p["px"] = round(CHART_PAD["l"] + (plot_w * i / (n - 1) if n > 1 else plot_w / 2), 2)
+        if x_span and x_span > 1:
+            p["px"] = round(CHART_PAD["l"] + plot_w * (p[x_key] - 1) / (x_span - 1), 2)
+        else:
+            p["px"] = round(CHART_PAD["l"] + (plot_w * i / (n - 1) if n > 1 else plot_w / 2), 2)
         p["py"] = round(plot_bottom - (plot_h * p[value_key] / y_max), 2)
 
     polyline = " ".join(f"{p['px']},{p['py']}" for p in points)
@@ -521,18 +571,32 @@ def spending_trend_chart(db, today, start, end):
         running += daily_totals.get(d.isoformat(), 0)
         points.append({"day": day_num, "label": d.strftime("%d %b"), "amount": daily_totals.get(d.isoformat(), 0), "cumulative": running})
 
-    return line_chart_geometry(points, value_key="cumulative")
+    # Anchor the x-axis to the whole current calendar month, not just the days
+    # elapsed — otherwise the line always stretches edge to edge and (early in
+    # the month) reads as if the month were already over.
+    month_start = date(today.year, today.month, 1)
+    next_month_start = (
+        date(today.year + 1, 1, 1) if today.month == 12 else date(today.year, today.month + 1, 1)
+    )
+    days_in_month = (next_month_start - month_start).days
+
+    geometry = line_chart_geometry(points, value_key="cumulative", x_span=days_in_month, x_key="day")
+    geometry["x_last_label"] = date(today.year, today.month, days_in_month).strftime("%d %b")
+    return geometry
 
 
 def cash_flow_chart(db):
-    """Income vs. spend per month for the trailing 12 months, as grouped-column SVG geometry.
+    """Income vs. spend per month, as grouped-column SVG geometry.
+
+    Covers TREND_START_MONTH through the current month (see trend_months()), so
+    the chart grows rather than rolling a month off the left edge each month.
 
     `scheduled_income` (income_sources) has no history — it's a live snapshot, so every
-    historical month is credited with today's scheduled rate. Only custom_incomes varies
+    month is credited with today's scheduled rate. Only custom_incomes varies
     per month. auto_save is not subtracted from spend: it's an internal transfer of
     unspent budget, not an outflow.
     """
-    months = trailing_months(retain_months=12)
+    months = trend_months()
     scheduled = total_scheduled_income(db)
 
     rows = []
@@ -598,14 +662,16 @@ def cash_flow_chart(db):
 
 
 def savings_trajectory_chart(db):
-    """Cumulative auto-saved total across the trailing 12 months, as line-chart geometry.
+    """Cumulative auto-saved total since TREND_START_MONTH, as line-chart geometry.
 
-    Tracks only the 'Auto-saved (Unspent)' pot's source transactions, within the
-    12-month retention window — not pots.balance, which manual edits can also change.
+    Anchored to the same window as the cash-flow chart (see trend_months()), so
+    the running total starts accumulating from that month. Tracks only the
+    'Auto-saved (Unspent)' pot's source transactions — not pots.balance, which
+    manual edits can also change.
     """
     running = 0
     points = []
-    for m in trailing_months(retain_months=12):
+    for m in trend_months():
         month_total = auto_save_for_range(db, m["start"], m["end"])
         running += month_total
         points.append({"label": m["full_label"], "month_total": month_total, "cumulative": running})
@@ -687,6 +753,52 @@ def trailing_months(retain_months=12):
     return result
 
 
+# The Trends page charts are anchored here rather than to a rolling 12-month
+# window: every month from this one through the current month is charted, so
+# the charts grow one bar/point per month instead of shifting an old month off
+# the left edge. The Savings page's "Saved by Month" chart still uses
+# trailing_months(12), and ledger retention is unaffected.
+TREND_START_MONTH = "2026-09"
+
+
+def months_between(start_key, end_key=None):
+    """Month descriptors (same shape as trailing_months), oldest first, from
+    `start_key` through `end_key` (default: the current month). Falls back to
+    the current month alone if `start_key` is after `end_key`, so a start month
+    in the future never yields a blank chart."""
+    today = date.today()
+    end_key = end_key or f"{today.year:04d}-{today.month:02d}"
+    if not MONTH_KEY_RE.match(start_key) or not MONTH_KEY_RE.match(end_key):
+        return trailing_months(1)
+    sy, sm = map(int, start_key.split("-"))
+    ey, em = map(int, end_key.split("-"))
+    if (sy, sm) > (ey, em):
+        sy, sm = ey, em
+
+    result = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        key = f"{y:04d}-{m:02d}"
+        start, end = month_key_bounds(key)
+        result.append({
+            "key": key,
+            "label": date(y, m, 1).strftime("%b'%y"),
+            "full_label": date(y, m, 1).strftime("%B %Y").title(),
+            "start": start,
+            "end": end,
+        })
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return result
+
+
+def trend_months():
+    """Months shown on the Trends page: TREND_START_MONTH through the current month."""
+    return months_between(TREND_START_MONTH)
+
+
 ENTRY_UNION_SQL = """
     SELECT t.id AS id, t.created_at AS created_at, t.amount AS amount, t.kind AS kind,
            t.note AS note, c.name AS category_name, 'transaction' AS source
@@ -720,6 +832,32 @@ LEDGER_ENTRIES_SQL = (
     )
     + ") ORDER BY created_at DESC"
 )
+
+# Hand-made pot movements for the Savings page's merged audit log. Deposits
+# (pot_deposits) are available -> pot; pot_movements are pot -> pot (transfer)
+# or pot -> available (withdraw, to_pot_id NULL). `source` picks the matching
+# UNDO route; `kind` drives the label and direction.
+POT_MOVEMENT_LOG_SQL = """
+    SELECT d.id AS id, d.created_at AS created_at, d.amount AS amount, d.note AS note,
+           'deposit' AS kind, 'deposit' AS source,
+           p.name AS pot_name, NULL AS counterpart_name
+    FROM pot_deposits d
+    JOIN pots p ON p.id = d.pot_id
+    UNION ALL
+    SELECT m.id AS id, m.created_at AS created_at, m.amount AS amount, m.note AS note,
+           CASE WHEN m.to_pot_id IS NULL THEN 'withdraw' ELSE 'transfer' END AS kind,
+           'movement' AS source,
+           fp.name AS pot_name, tp.name AS counterpart_name
+    FROM pot_movements m
+    JOIN pots fp ON fp.id = m.from_pot_id
+    LEFT JOIN pots tp ON tp.id = m.to_pot_id
+    ORDER BY created_at DESC, id DESC
+    LIMIT :limit
+"""
+
+
+def get_pot_movements(db, limit=20):
+    return db.execute(POT_MOVEMENT_LOG_SQL, {"limit": limit}).fetchall()
 
 
 def get_ledger_for_month(month_key):
@@ -795,8 +933,9 @@ def build_dashboard_data():
     custom_income = custom_income_for_range(db, start, end)
     income = scheduled_income + custom_income
     manual_saved = pot_deposit_for_range(db, start, end)
+    withdrawn = pot_withdrawn_for_range(db, start, end)
     custom_expense = custom_expense_for_range(db, start, end)
-    available = income - total_scheduled - manual_saved - custom_expense
+    available = income - total_scheduled - manual_saved + withdrawn - custom_expense
 
     recent = db.execute(ALL_ENTRIES_SQL + " LIMIT 8").fetchall()
 
@@ -813,8 +952,9 @@ def build_dashboard_data():
     # while this subtracts only money that has really left the wallet — real
     # category spending plus anything banked into a pot by hand this month
     # (custom_expense is already counted in both, since it was never part of
-    # a category budget to reserve).
-    cash_left = income - total_spent - manual_saved
+    # a category budget to reserve). Money withdrawn from a pot back to
+    # available (withdrawn) is added back to both figures.
+    cash_left = income - total_spent - manual_saved + withdrawn
 
     trend = spending_trend_chart(db, today, start, end)
 
@@ -824,6 +964,7 @@ def build_dashboard_data():
         "custom_income": custom_income,
         "total_scheduled": total_scheduled,
         "manual_saved": manual_saved,
+        "withdrawn": withdrawn,
         "available": available,
         "categories": cat_rows,
         "pots": pots,
@@ -1056,10 +1197,11 @@ def add_category():
         ).fetchone()["m"]
 
         db.execute(
-            """INSERT INTO categories (name, budget_amount, due_day, sort_order, period, client_id)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO categories (name, budget_amount, due_day, sort_order, period, client_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(client_id) WHERE client_id IS NOT NULL DO NOTHING""",
-            (name, budget_amount, due_day, max_order + 1, period, client_id),
+            (name, budget_amount, due_day, max_order + 1, period, client_id,
+             datetime.now().isoformat(timespec="seconds")),
         )
         db.commit()
 
@@ -1085,15 +1227,33 @@ def edit_category(category_id):
     return redirect(url_for("dashboard"))
 
 
-def sweep_unspent(db, category, window_start, window_end):
+def sweep_unspent(db, category, window_start, window_end, strict_key=False):
     """Move a category's unspent budget for [window_start, window_end) into the
-    Auto-saved pot, unless that window was already swept (keeps /close-day
-    safe to call more than once, e.g. from an external cron)."""
-    already_swept = db.execute(
-        """SELECT 1 FROM transactions
-           WHERE category_id = ? AND kind = 'auto_save' AND created_at >= ?""",
-        (category["id"], window_start),
-    ).fetchone()
+    Auto-saved pot, unless that window was already swept (keeps /close-day safe
+    to call more than once, e.g. from an external cron or the dashboard button).
+
+    `strict_key=True` checks for an exact `sweep_key = window_start` row, which
+    is what let a single /close-day catch up several missed windows without
+    re-banking one. `strict_key=False` (the legacy path) instead treats any
+    auto_save row at/after the window start as "already swept" — loose, but it
+    recognizes rows written by older versions, which have no `sweep_key`.
+
+    Either way the pre-check is only a fast path: two requests can both pass it
+    before either writes. The INSERT carries `sweep_key` = the window's start
+    date and relies on the partial unique index on (category_id, sweep_key) so
+    only one can win, and only the winner credits the pot."""
+    if strict_key:
+        already_swept = db.execute(
+            """SELECT 1 FROM transactions
+               WHERE category_id = ? AND kind = 'auto_save' AND sweep_key = ?""",
+            (category["id"], window_start),
+        ).fetchone()
+    else:
+        already_swept = db.execute(
+            """SELECT 1 FROM transactions
+               WHERE category_id = ? AND kind = 'auto_save' AND created_at >= ?""",
+            (category["id"], window_start),
+        ).fetchone()
     if already_swept:
         return 0
 
@@ -1102,10 +1262,14 @@ def sweep_unspent(db, category, window_start, window_end):
     if leftover <= 0:
         return 0
 
-    db.execute(
-        "INSERT INTO transactions (category_id, amount, kind, note, created_at) VALUES (?, ?, 'auto_save', ?, ?)",
-        (category["id"], leftover, "Unspent scheduled amount", datetime.now().isoformat(timespec="seconds")),
+    cur = db.execute(
+        """INSERT INTO transactions (category_id, amount, kind, note, created_at, sweep_key)
+           VALUES (?, ?, 'auto_save', ?, ?, ?)
+           ON CONFLICT(category_id, sweep_key) WHERE sweep_key IS NOT NULL DO NOTHING""",
+        (category["id"], leftover, "Unspent scheduled amount", datetime.now().isoformat(timespec="seconds"), window_start),
     )
+    if not cur.rowcount:
+        return 0  # another request banked this window first
     db.execute(
         "UPDATE pots SET balance = balance + ? WHERE name = 'Auto-saved (Unspent)'",
         (leftover,),
@@ -1113,39 +1277,176 @@ def sweep_unspent(db, category, window_start, window_end):
     return leftover
 
 
+def apply_pot_movement(db, from_pot_id, to_pot_id, amount, note, client_id):
+    """Move money out of one pot, either into another pot (to_pot_id set) or back
+    to available/remaining balance (to_pot_id None). Both balances are updated in
+    the same transaction, and only when the movement row was actually inserted —
+    a replayed offline submission hits the client_id conflict and must not move
+    the money a second time.
+
+    Returns a reason string the route turns into user-facing feedback:
+    'ok', 'invalid', 'unknown_pot', 'same_pot', 'insufficient', or 'duplicate'
+    (an idempotent replay, not an error)."""
+    if not amount or amount <= 0:
+        return "invalid"
+
+    source = db.execute(
+        "SELECT id, balance FROM pots WHERE id = ?", (from_pot_id,)
+    ).fetchone()
+    if not source:
+        return "unknown_pot"
+
+    if to_pot_id is not None:
+        # 0/negative is a malformed id, not "back to available" (which is None).
+        if to_pot_id <= 0:
+            return "invalid"
+        if to_pot_id == source["id"]:
+            return "same_pot"
+        dest = db.execute("SELECT id FROM pots WHERE id = ?", (to_pot_id,)).fetchone()
+        if not dest:
+            return "unknown_pot"
+
+    if source["balance"] < amount:
+        return "insufficient"
+
+    cur = db.execute(
+        """INSERT INTO pot_movements (from_pot_id, to_pot_id, amount, note, created_at, client_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(client_id) WHERE client_id IS NOT NULL DO NOTHING""",
+        (source["id"], to_pot_id, amount, note, datetime.now().isoformat(timespec="seconds"), client_id),
+    )
+    if not cur.rowcount:
+        return "duplicate"
+
+    # Guarded debit: the INSERT above is the idempotency gate, but two requests
+    # can still pass the balance check concurrently (gunicorn runs multiple
+    # threads against one SQLite file). Re-check inside the UPDATE and abandon
+    # without committing if the pot was drained in between, so it can't overdraw.
+    debit = db.execute(
+        "UPDATE pots SET balance = balance - ? WHERE id = ? AND balance >= ?",
+        (amount, source["id"], amount),
+    )
+    if not debit.rowcount:
+        db.rollback()  # drop the movement row too; nothing has moved
+        return "insufficient"
+
+    if to_pot_id is not None:
+        db.execute("UPDATE pots SET balance = balance + ? WHERE id = ?", (amount, to_pot_id))
+    db.commit()
+    return "ok"
+
+
+def _retention_floor(today, retain_months=12):
+    """First day of the oldest month retention still keeps — catch-up never
+    looks further back, since `prune_old_transactions` has deleted older spends
+    and a sweep there would blindly bank the full budget."""
+    month_index = today.month - retain_months
+    year = today.year
+    while month_index <= 0:
+        month_index += 12
+        year -= 1
+    return date(year, month_index, 1)
+
+
+def _category_created_date(category):
+    """A category's created_at as a date, or None for legacy rows created before
+    the column existed (those keep the old single-window behavior)."""
+    try:
+        raw = category["created_at"]
+    except (IndexError, KeyError):
+        raw = None
+    return date.fromisoformat(raw[:10]) if raw else None
+
+
+def _week_windows(start_day, last_start):
+    """Every completed Monday-Sunday window from the week containing `start_day`
+    through the one beginning at `last_start`, oldest first."""
+    d = start_day - timedelta(days=start_day.weekday())
+    last = date.fromisoformat(last_start)
+    while d <= last:
+        yield d.isoformat(), (d + timedelta(days=7)).isoformat()
+        d += timedelta(days=7)
+
+
+def _month_windows(start_day, last_start):
+    """Every completed calendar month from `start_day`'s month through the one
+    beginning at `last_start`, oldest first."""
+    y, m = start_day.year, start_day.month
+    last = date.fromisoformat(last_start)
+    while (y, m) <= (last.year, last.month):
+        ws = date(y, m, 1)
+        we = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
+        yield ws.isoformat(), we.isoformat()
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+
+def run_close_day(db, today):
+    """Bank every completed, not-yet-swept weekly/monthly window.
+
+    Catch-up safe: on any day it sweeps the most recent completed window *and*
+    any earlier ones that were missed, so a forgotten 1st (or Monday) doesn't
+    cost a period. Windows are bounded below by the category's `created_at`
+    (never bank a period before the category existed) and by the retention
+    floor. Legacy categories with no `created_at` keep the old single-window
+    behavior, so deploying this can't retroactively re-bank their history.
+
+    Returns the total moved into the Auto-saved pot; the caller commits."""
+    moved_total = 0
+    floor = _retention_floor(today).isoformat()
+    week_last_start = prev_week_bounds(today)[0]
+    month_last_start = prev_month_bounds(today)[0]
+
+    weekly = db.execute("SELECT * FROM categories WHERE period = 'weekly'").fetchall()
+    for c in weekly:
+        created = _category_created_date(c)
+        if created is None:
+            ws, we = prev_week_bounds(today)
+            moved_total += sweep_unspent(db, c, ws, we, strict_key=False)
+        else:
+            start = max(created, _retention_floor(today))
+            for ws, we in _week_windows(start, week_last_start):
+                moved_total += sweep_unspent(db, c, ws, we, strict_key=True)
+
+    monthly = db.execute("SELECT * FROM categories WHERE period = 'monthly'").fetchall()
+    for c in monthly:
+        created = _category_created_date(c)
+        if created is None:
+            ws, we = prev_month_bounds(today)
+            moved_total += sweep_unspent(db, c, ws, we, strict_key=False)
+        else:
+            start = max(created, _retention_floor(today))
+            for ws, we in _month_windows(start, month_last_start):
+                moved_total += sweep_unspent(db, c, ws, we, strict_key=True)
+
+    return moved_total
+
+
 @app.route("/close-day", methods=["POST"])
 def close_day():
     """Manual trigger for the 'unspent scheduled amount moves to savings' rule,
     plus a data-retention sweep that deletes transactions older than 1 year.
     In production this is meant to run once daily via a scheduled job (e.g. Fly.io cron).
-    Weekly categories sweep every Monday, banking what was left of the week that
-    just ended. Monthly categories sweep on the 1st of every month, banking what
-    was left of the month that just ended — the same fixed schedule for every
-    monthly category, regardless of its own `due_day` (which is only a bill-due
-    reminder, the DUE TODAY badge, and no longer drives the sweep)."""
+
+    Weekly categories bank the week that just ended, monthly categories the
+    month that just ended — the same schedule for every category of that
+    period, regardless of its own `due_day` (which is only a bill-due reminder
+    and the DUE TODAY badge). It is catch-up safe (see `run_close_day`), so it
+    does not have to be called on a Monday or the 1st."""
     db = get_db()
     prune_old_transactions(retain_months=12)
     today = date.today()
 
-    moved_total = 0
-
-    if today.weekday() == 0:  # Monday: close out the week that just ended
-        week_start, week_end = prev_week_bounds(today)
-        weekly_categories = db.execute(
-            "SELECT * FROM categories WHERE period = 'weekly'"
-        ).fetchall()
-        for c in weekly_categories:
-            moved_total += sweep_unspent(db, c, week_start, week_end)
-
-    if today.day == 1:  # 1st of the month: close out the month that just ended
-        month_start, month_end = prev_month_bounds(today)
-        monthly_categories = db.execute(
-            "SELECT * FROM categories WHERE period = 'monthly'"
-        ).fetchall()
-        for c in monthly_categories:
-            moved_total += sweep_unspent(db, c, month_start, month_end)
-
+    moved_total = run_close_day(db, today)
     db.commit()
+
+    if moved_total:
+        flash(f"Swept {format_rp(moved_total)} of unspent budget into Auto-saved (Unspent).", "success")
+    else:
+        flash("Nothing to sweep — every completed window is already banked.", "info")
+
     return redirect(url_for("dashboard"))
 
 
@@ -1219,17 +1520,11 @@ def savings():
         for c in db.execute("SELECT budget_amount, period FROM categories")
     )
     manual_saved = pot_deposit_for_range(db, month_start, month_end_excl)
+    withdrawn = pot_withdrawn_for_range(db, month_start, month_end_excl)
     custom_expense = custom_expense_for_range(db, month_start, month_end_excl)
-    available = income - scheduled_total - manual_saved - custom_expense
+    available = income - scheduled_total - manual_saved + withdrawn - custom_expense
 
-    deposits = db.execute(
-        """SELECT d.id AS id, d.created_at AS created_at, d.amount AS amount,
-                  d.note AS note, p.name AS pot_name
-           FROM pot_deposits d
-           JOIN pots p ON p.id = d.pot_id
-           ORDER BY d.created_at DESC, d.id DESC
-           LIMIT 20"""
-    ).fetchall()
+    movements = get_pot_movements(db, limit=20)
 
     history = db.execute(
         """SELECT t.created_at AS created_at, t.amount AS amount,
@@ -1253,9 +1548,10 @@ def savings():
         by_category=by_category,
         by_month=by_month,
         history=history,
-        deposits=deposits,
+        movements=movements,
         available=max(0, available),
         manual_saved=manual_saved,
+        withdrawn=withdrawn,
         today=today.strftime("%d %b %Y").upper(),
     )
 
@@ -1270,9 +1566,13 @@ def add_pot_deposit():
     note = request.form.get("note", "").strip()
     client_id = request.form.get("client_id") or None
 
-    pot = db.execute("SELECT id FROM pots WHERE id = ?", (pot_id,)).fetchone() if pot_id else None
+    pot = db.execute("SELECT id, name FROM pots WHERE id = ?", (pot_id,)).fetchone() if pot_id else None
 
-    if pot and amount and amount > 0:
+    if not amount:
+        flash("Enter a valid amount to set aside.", "error")
+    elif not pot:
+        flash("Pick a pot to set the money aside in.", "error")
+    else:
         cur = db.execute(
             """INSERT INTO pot_deposits (pot_id, amount, note, created_at, client_id)
                VALUES (?, ?, ?, ?, ?)
@@ -1286,6 +1586,7 @@ def add_pot_deposit():
             db.execute(
                 "UPDATE pots SET balance = balance + ? WHERE id = ?", (amount, pot["id"])
             )
+            flash(f"Set aside {format_rp(amount)} into {pot['name']}.", "success")
         db.commit()
 
     return redirect(url_for("savings"))
@@ -1301,11 +1602,94 @@ def delete_pot_deposit(deposit_id):
     ).fetchone()
 
     if row:
-        db.execute(
-            "UPDATE pots SET balance = balance - ? WHERE id = ?", (row["amount"], row["pot_id"])
-        )
-        db.execute("DELETE FROM pot_deposits WHERE id = ?", (deposit_id,))
-        db.commit()
+        # Delete first; only debit the pot if this request removed the row, so a
+        # concurrent/duplicate undo can't debit it twice.
+        deleted = db.execute("DELETE FROM pot_deposits WHERE id = ?", (deposit_id,))
+        if deleted.rowcount:
+            db.execute(
+                "UPDATE pots SET balance = balance - ? WHERE id = ?", (row["amount"], row["pot_id"])
+            )
+            db.commit()
+            flash(f"Reverted {format_rp(row['amount'])} — money is back in available.", "success")
+
+    return redirect(url_for("savings"))
+
+
+@app.route("/savings/allocate", methods=["POST"])
+def allocate_savings():
+    """Move money between pots, or from a pot back to available/remaining
+    balance. `to_pot_id` blank means 'available'. A transfer (pot -> pot) only
+    reshuffles pots.balance; a withdrawal (pot -> available) is also added back
+    to the dashboard's available/cash_left figures, since it is money returning
+    to this month's unallocated cash."""
+    db = get_db()
+    from_pot_id = request.form.get("from_pot_id", type=int)
+    # Blank destination means "back to available"; anything else must be a real
+    # positive pot id. A malformed value is passed through as -1 (rejected by
+    # apply_pot_movement) rather than being coerced into a withdrawal.
+    to_raw = request.form.get("to_pot_id", "").strip()
+    if to_raw == "":
+        to_pot_id = None
+    else:
+        try:
+            to_pot_id = int(to_raw)
+        except ValueError:
+            to_pot_id = -1
+    amount = clamp_amount(request.form.get("amount", type=int))
+    note = request.form.get("note", "").strip()
+    client_id = request.form.get("client_id") or None
+
+    result = apply_pot_movement(db, from_pot_id, to_pot_id, amount, note, client_id)
+    amount_label = format_rp(amount) if amount else "that amount"
+
+    if result == "ok":
+        source_name = db.execute("SELECT name FROM pots WHERE id = ?", (from_pot_id,)).fetchone()["name"]
+        if to_pot_id:
+            dest_name = db.execute("SELECT name FROM pots WHERE id = ?", (to_pot_id,)).fetchone()["name"]
+            flash(f"Transferred {amount_label} from {source_name} to {dest_name}.", "success")
+        else:
+            flash(f"Moved {amount_label} from {source_name} back to available.", "success")
+    elif result == "insufficient":
+        flash(f"Not enough in the source pot to move {amount_label}.", "error")
+    elif result == "same_pot":
+        flash("Source and destination pots must be different.", "error")
+    elif result == "unknown_pot":
+        flash("That pot no longer exists — pick another.", "error")
+    elif result == "invalid":
+        flash("Enter a valid amount and a destination pot.", "error")
+    # "duplicate" is an idempotent replay (e.g. a retried offline submit): the
+    # money already moved, so stay quiet rather than alarming the user.
+
+    return redirect(url_for("savings"))
+
+
+@app.route("/savings/movement/<int:movement_id>/delete", methods=["POST"])
+def delete_pot_movement(movement_id):
+    """Undo a transfer or withdrawal: put the money back where it came from
+    (and take it off the destination pot, if there was one) as well as dropping
+    the row, or the stored balances would drift apart."""
+    db = get_db()
+    row = db.execute(
+        "SELECT from_pot_id, to_pot_id, amount FROM pot_movements WHERE id = ?",
+        (movement_id,),
+    ).fetchone()
+
+    if row:
+        # Delete first and only move money if this request actually removed the
+        # row: a concurrent/duplicate undo would otherwise credit the pot twice.
+        deleted = db.execute("DELETE FROM pot_movements WHERE id = ?", (movement_id,))
+        if deleted.rowcount:
+            db.execute(
+                "UPDATE pots SET balance = balance + ? WHERE id = ?",
+                (row["amount"], row["from_pot_id"]),
+            )
+            if row["to_pot_id"] is not None:
+                db.execute(
+                    "UPDATE pots SET balance = balance - ? WHERE id = ?",
+                    (row["amount"], row["to_pot_id"]),
+                )
+            db.commit()
+            flash(f"Reverted a {format_rp(row['amount'])} pot movement.", "success")
 
     return redirect(url_for("savings"))
 
@@ -1315,10 +1699,15 @@ def trends():
     db = get_db()
     cash_flow = cash_flow_chart(db)
     trajectory = savings_trajectory_chart(db)
+    months = trend_months()
+    trend_range_label = (
+        f"{months[0]['full_label']} – {months[-1]['full_label']}" if months else ""
+    )
     return render_template(
         "trends.html",
         cash_flow=cash_flow,
         trajectory=trajectory,
+        trend_range_label=trend_range_label,
         today=date.today().strftime("%d %b %Y").upper(),
     )
 

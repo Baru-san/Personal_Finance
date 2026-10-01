@@ -92,6 +92,30 @@ body::after {
 }
 .logout-btn:hover { opacity: 1; color: var(--pink); }
 
+/* ===== FLASH MESSAGES ===== */
+.flash-stack {
+  max-width: 1100px; margin: 16px auto 0; padding: 0 26px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.flash {
+  display: flex; align-items: center; gap: 10px;
+  font-family: 'Space Mono', monospace; font-size: 13px; line-height: 1.4;
+  padding: 10px 14px; border: 1px dashed var(--green-dim); background: var(--bg-panel);
+  color: var(--text);
+}
+.flash-icon {
+  flex: 0 0 auto; width: 18px; height: 18px; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 50%;
+  font-size: 12px; font-weight: 700;
+}
+.flash-success { border-color: var(--green); box-shadow: 0 0 10px rgba(53,255,143,0.15); }
+.flash-success .flash-icon { color: #06120a; background: var(--green); }
+.flash-error { border-color: var(--red); box-shadow: 0 0 10px rgba(255,95,95,0.18); }
+.flash-error .flash-icon { color: #06120a; background: var(--red); }
+.flash-error .flash-msg { color: var(--red); }
+.flash-info { border-color: var(--amber); }
+.flash-info .flash-icon { color: #06120a; background: var(--amber); }
+
 .topnav { display: flex; gap: 22px; }
 .topnav a {
   color: var(--text); opacity: 0.6; text-decoration: none;
@@ -227,6 +251,15 @@ body::after {
 }
 .mini-form button:hover { background: var(--amber); }
 
+/* ===== MOVE MONEY ===== */
+.move-forms { display: grid; gap: 14px; max-width: 760px; }
+.move-forms .mini-form { align-items: center; }
+.move-form-title {
+  flex: 0 0 100%; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+  opacity: 0.55;
+}
+.move-arrow { color: var(--green); font-size: 16px; align-self: center; }
+
 /* ===== LOGIN ===== */
 .login-hero { display: flex; justify-content: center; padding: 60px 26px; }
 .login-window { max-width: 360px; width: 100%; }
@@ -263,6 +296,8 @@ body::after {
 }
 .trend-end-dot { fill: var(--green); stroke: var(--bg-panel); stroke-width: 2; }
 .trend-end-label { fill: var(--green); font-family: 'VT323', monospace; font-size: 15px; }
+.trend-today-line { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.5; vector-effect: non-scaling-stroke; }
+.trend-today-label { fill: var(--amber); font-family: inherit; font-size: 9px; letter-spacing: 1px; opacity: 0.8; }
 .trend-hover-dot { fill: var(--green); stroke: var(--bg-panel); stroke-width: 2; opacity: 0; pointer-events: none; }
 .trend-crosshair { stroke: var(--green-dim); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0; pointer-events: none; }
 .trend-hit { fill: transparent; }

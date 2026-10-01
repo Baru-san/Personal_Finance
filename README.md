@@ -32,6 +32,19 @@ set `LEDGER_PASSWORD_HASH` yourself instead and the app skips setup entirely:
     export LEDGER_PASSWORD_HASH='<paste the hash>'
     python app.py
 
+### Test data
+
+To try the UI without entering real data, seed a throwaway database — it is
+git-ignored (`dummy.db*`) and safe to delete or rebuild at any time:
+
+    python seed_dummy_db.py
+    DB_PATH=dummy.db LEDGER_DISABLE_AUTH=1 python app.py
+
+`seed_dummy_db.py` writes categories, income, spends across the current and
+previous months, one-off entries, and pot deposits/transfers/withdrawals, all
+dated relative to today. Re-running it rebuilds the dummy from scratch; your
+real `ledger.db` is never touched.
+
 ### Skipping the password while developing
 
 To run without any login at all — no setup wizard, no password prompt — start
@@ -49,10 +62,12 @@ so never set it on a deployed instance.
 - **Categories**: add your own budget categories from the "Add Scheduled
   Category" box on the dashboard (name, budget amount, optional due day).
 - **Log an expense**: use the "SPEND" box on any category card on the dashboard.
-- **Auto-save on unspent**: press "Run Daily Close" to sweep any leftover
-  budget from categories whose `due_day` is today into the
-  "Auto-saved (Unspent)" pot. In production, trigger this automatically once
-  a day instead of by hand (see below).
+- **Auto-save on unspent**: press "Run Daily Close" to bank each completed
+  week/month's leftover budget into the "Auto-saved (Unspent)" pot. It is
+  catch-up safe: running it on any day banks the most recent completed window
+  plus any earlier ones you missed, so a forgotten Monday/1st doesn't lose a
+  period. In production, trigger it automatically once a day instead of by
+  hand (see below).
 - **Set aside current money**: the Savings tab's "Set Aside Current Money"
   box banks cash you already have into any pot right now, without waiting for
   a sweep. It prefills the amount that's still unallocated this month, takes
@@ -60,6 +75,12 @@ so never set it on a deployed instance.
   button that pulls the money back out of the pot. Money set aside this way is
   subtracted from "Available This Month" on the dashboard, so it stops being
   counted as spendable.
+- **Allocate savings**: the Savings tab's "Move Money" box also moves money
+  *out* of a pot — into another pot (e.g. sweeping the "Auto-saved (Unspent)"
+  pot into "Emergency Fund"), or back to available/remaining balance. A
+  pot-to-pot move only reshuffles the pots; a move back to available raises
+  "Available This Month" and "Money Left" on the dashboard. Every movement is
+  listed in the merged "Pot Movements" log with an UNDO button.
 - **Income**: the Income tab lets you add recurring "scheduled income"
   sources (e.g. salary, counted every month) and one-off "custom income"
   entries (added anytime, counted only for that month).
