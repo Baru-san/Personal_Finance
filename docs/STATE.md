@@ -6,8 +6,8 @@
 ## 1. Repository snapshot
 
 - Branch: `feature/savings-allocation-and-catchup`
-- Last commit: `cb8dfe0 Add savings allocation, trend anchoring, and catch-up daily close`
-- Working tree: **dirty** (uncommitted changes; see §4)
+- Last commit: `f79d405 Add wishlist page, offline write guards, and project docs`
+- Working tree: **clean**
 - Test command: `python3 -m unittest discover -s tests -v`
 - Last verified result: **53 tests passed** on 2026-10-19.
 - Last documentation review: **2026-10-19** — project-memory read/verify
@@ -34,7 +34,7 @@
 | Dummy seed script | Done | `DummySeedTests` |
 | Fly.io, Docker, PythonAnywhere deployment files | Done | README + config files |
 
-## 3. Recently completed (working tree)
+## 3. Recently completed (committed in `f79d405`)
 
 The **Wishlist page** (`/wishlist`) is implemented:
 
@@ -63,20 +63,17 @@ The double-transaction fix from `to_be_implemented.md` is **implemented**:
 4. `tests/test_app.py` — added deposit-replay, savings-form-attribute, and
    stale auto-save edit tests.
 
-## 4. Uncommitted working tree
+## 4. Committed in `f79d405`
 
-Changes present but **not committed** at the snapshot:
-
-- Double-transaction fix: `app.py`, `static/offline.js`,
-  `templates/savings.html`, `tests/test_app.py`.
 - Wishlist feature: `app.py`, `templates/wishlist.html`, all nav templates,
   `static/style.css`, `static/offline.js` (comment), `static/sw.js`,
   `tests/test_app.py`, and `docs/`.
-- Pre-existing/user edits: `.dockerignore`, `.gitignore`, `CLAUDE.md`,
-  `README.md`.
-- Untracked: `to_be_implemented.md` (its plan is now implemented).
-- New in this documentation task: `AGENTS.md`, `docs/`, and
+- Double-transaction fix: `app.py`, `static/offline.js`,
+  `templates/savings.html`, `tests/test_app.py`.
+- Project memory: `AGENTS.md`, `docs/`, and
   `.opencode/skills/project-memory/SKILL.md`.
+- Operator edits: `.dockerignore`, `.gitignore`, `CLAUDE.md`, `README.md`.
+- `to_be_implemented.md` (its plan is implemented; kept as history).
 
 ## 5. Known issues and limitations
 
@@ -103,17 +100,15 @@ Prioritized:
 2. **Manually verify** the wishlist add form with the network disabled:
    confirm it queues, replays once on reconnect, and that edit/buy/restore/
    delete stay online-only.
-3. **Commit** the fix, wishlist, and documentation once verification passes
-   (only when the owner asks for a commit).
-4. Consider a minimal browser/JS test harness or a documented manual test
+3. Consider a minimal browser/JS test harness or a documented manual test
    checklist for the offline queue and service worker.
-5. Add a dedicated test for `edit_category`, including weekly due-day
+4. Add a dedicated test for `edit_category`, including weekly due-day
    normalization.
-6. Decide whether savings deposit/allocate should preserve flash feedback in
+5. Decide whether savings deposit/allocate should preserve flash feedback in
    the JS path (e.g. different success handling) or whether the current
    trade-off is acceptable.
-7. Merge the feature branch after review.
-8. Remove or archive the now-implemented `to_be_implemented.md` plan.
+6. Merge the feature branch after review.
+7. Remove or archive the now-implemented `to_be_implemented.md` plan.
 
 ## 7. Verification checklist for the next session
 
