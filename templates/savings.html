@@ -22,6 +22,7 @@
       <a href="{{ url_for('savings') }}" class="active">Savings</a>
       <a href="{{ url_for('trends') }}">Trends</a>
       <a href="{{ url_for('income') }}">Income</a>
+      <a href="{{ url_for('wishlist') }}">Wishlist</a>
     </nav>
     <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
   </div>
@@ -61,7 +62,7 @@
     </div>
 
     <div class="move-forms">
-      <form action="{{ url_for('add_pot_deposit') }}" method="post" class="mini-form" style="flex-wrap:wrap; gap:10px;">
+      <form action="{{ url_for('add_pot_deposit') }}" method="post" class="mini-form" data-offline-queue="deposit" style="flex-wrap:wrap; gap:10px;">
         <div class="move-form-title">SET ASIDE UNALLOCATED CASH</div>
         <select name="pot_id" style="flex:1; min-width:150px;">
           {% for p in pots %}
@@ -73,7 +74,7 @@
         <button type="submit" style="flex:0 0 auto;">SAVE TO POT</button>
       </form>
 
-      <form action="{{ url_for('allocate_savings') }}" method="post" class="mini-form" style="flex-wrap:wrap; gap:10px;">
+      <form action="{{ url_for('allocate_savings') }}" method="post" class="mini-form" data-offline-queue="allocate" style="flex-wrap:wrap; gap:10px;">
         <div class="move-form-title">ALLOCATE A POT</div>
         <select name="from_pot_id" style="flex:1; min-width:150px;">
           {% for p in pots %}

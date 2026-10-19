@@ -5,6 +5,8 @@
 # Local data
 ledger.db
 ledger.db-journal
+# Timestamped backups (see README "Updating a deployment")
+ledger.db.bak-*
 
 # SQLite sidecar files
 ledger.db-wal

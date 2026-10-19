@@ -57,17 +57,37 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 // ============================================================
-// Offline write queue — lets the five "add" forms (spend, one-off
-// expense/income, scheduled category/income source) keep working with no
-// signal: the submission is stored in IndexedDB and replayed automatically
-// on reconnect. Deliberately NOT applied to edit_category, edit_journal_entry,
-// or close_day: the edits don't need it (they're already idempotent — see
-// app.py), and close_day is cron-driven and derives its window from the
-// server's current date, so replaying it later would sweep the wrong period.
+// Offline write queue — lets the add forms (spend, one-off expense/income,
+// scheduled category/income source, savings deposit/allocate, and wishlist
+// items) keep working
+// with no signal: the submission is stored in IndexedDB and replayed
+// automatically on reconnect. Deliberately NOT applied to edit_category,
+// edit_journal_entry, deletes/undos, or close_day: the edits don't need it
+// (they're already idempotent — see app.py), and close_day is cron-driven and
+// derives its window from the server's current date, so replaying it later
+// would sweep the wrong period.
 // ============================================================
 
 var QUEUE_DB_NAME = 'ledger-offline-queue';
 var QUEUE_STORE = 'writes';
+
+// A form is only allowed one in-flight submission. Each submit generates a
+// fresh client_id, so without this guard a double-click fires two requests
+// with *different* keys and the server's ON CONFLICT dedup can't stop the
+// second one. Cleared once the submission is either navigated away (success)
+// or safely queued (offline), so the same form can still be used again.
+var submittingForms = new WeakSet();
+
+function setFormSubmitting(form, submitting) {
+  if (submitting) {
+    submittingForms.add(form);
+  } else {
+    submittingForms.delete(form);
+  }
+  form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(function (btn) {
+    btn.disabled = submitting;
+  });
+}
 
 function uuid() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -253,6 +273,9 @@ document.addEventListener('submit', function (event) {
   if (!kind) return;
 
   event.preventDefault();
+  if (submittingForms.has(form)) return;
+  setFormSubmitting(form, true);
+
   var clientId = uuid();
   var formData = new FormData(form);
   formData.set('client_id', clientId);
@@ -289,6 +312,11 @@ document.addEventListener('submit', function (event) {
         }
         form.reset();
         refreshQueueBanner();
+        setFormSubmitting(form, false);
+      }).catch(function () {
+        // queueAdd itself failed (e.g. IndexedDB unavailable) — let the user
+        // try again rather than leaving the form permanently disabled.
+        setFormSubmitting(form, false);
       });
     });
 });

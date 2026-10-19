@@ -309,6 +309,30 @@ class SavingsAllocationTests(LedgerTestCase):
         self.assertEqual(self.pot_balances()[self.EMERGENCY], 40_000)
         self.assertEqual(len(self.movement_rows()), 1)
 
+    def test_deposit_replay_is_idempotent(self):
+        client = self.make_client()
+        payload = {
+            "pot_id": str(self.pot_id(self.AUTO)),
+            "amount": "40000",
+            "client_id": "deposit-replay",
+        }
+        client.post("/savings/deposit", data=payload)
+        client.post("/savings/deposit", data=payload)  # replayed submission
+
+        con = sqlite3.connect(TEST_DB)
+        try:
+            count = con.execute("SELECT COUNT(*) FROM pot_deposits").fetchone()[0]
+        finally:
+            con.close()
+
+        self.assertEqual(count, 1)
+        self.assertEqual(self.pot_balances()[self.AUTO], 40_000)
+
+    def test_savings_money_forms_are_offline_queued(self):
+        html = self.make_client().get("/savings").get_data(as_text=True)
+        self.assertIn('data-offline-queue="deposit"', html)
+        self.assertIn('data-offline-queue="allocate"', html)
+
     def test_overdraw_is_rejected(self):
         client = self.make_client()
         self.seed_pot(client, self.AUTO, 50_000)
@@ -426,6 +450,178 @@ class SavingsAllocationTests(LedgerTestCase):
         self.assertEqual(balances[self.AUTO], 100_000)
         self.assertEqual(balances[self.EMERGENCY], 0)
         self.assertEqual(self.movement_rows(), [])
+
+
+class JournalEditIdempotencyTests(LedgerTestCase):
+    AUTO = "Auto-saved (Unspent)"
+
+    def _seed_auto_save(self, amount=100_000):
+        con = sqlite3.connect(TEST_DB)
+        try:
+            cat_id = con.execute(
+                "INSERT INTO categories (name, budget_amount, period) VALUES ('Food', ?, 'monthly')",
+                (amount,),
+            ).lastrowid
+            entry_id = con.execute(
+                """INSERT INTO transactions (category_id, amount, kind, note, created_at)
+                   VALUES (?, ?, 'auto_save', '', ?)""",
+                (cat_id, amount, date.today().isoformat() + "T00:00:00"),
+            ).lastrowid
+            con.execute("UPDATE pots SET balance = ? WHERE name = ?", (amount, self.AUTO))
+            con.commit()
+        finally:
+            con.close()
+        return entry_id
+
+    def test_stale_auto_save_edit_does_not_double_credit(self):
+        entry_id = self._seed_auto_save(100_000)
+        with ledger.app.test_request_context("/"):
+            db = ledger.get_db()
+            stale = db.execute(
+                "SELECT * FROM transactions WHERE id = ?", (entry_id,)
+            ).fetchone()
+            first = ledger.apply_journal_edit(db, stale, 150_000, "first")
+            second = ledger.apply_journal_edit(db, stale, 200_000, "second")
+            stored = db.execute(
+                "SELECT amount FROM transactions WHERE id = ?", (entry_id,)
+            ).fetchone()["amount"]
+
+        self.assertTrue(first)
+        self.assertFalse(second, "a stale read must not overwrite the newer edit")
+        self.assertEqual(stored, 150_000)
+        self.assertEqual(
+            self.pot_balances()[self.AUTO],
+            150_000,
+            "the pot must move by the applied delta once, not twice",
+        )
+
+
+class WishlistTests(LedgerTestCase):
+    def _add_item(self, client, name="Mechanical keyboard", price="1500000", **extra):
+        data = {"name": name, "price": price, "priority": "medium"}
+        data.update(extra)
+        return client.post("/wishlist/add", data=data)
+
+    def _items(self):
+        con = sqlite3.connect(TEST_DB)
+        con.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in con.execute("SELECT * FROM wishlist_items ORDER BY id")]
+        finally:
+            con.close()
+
+    def test_add_item_lists_it_on_the_page(self):
+        client = self.make_client()
+        self._add_item(client, note="Brown switches", url="https://example.com/kb")
+
+        resp = client.get("/wishlist")
+        body = resp.get_data(as_text=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Mechanical keyboard", body)
+        self.assertIn("1.500.000", body)
+        self.assertIn("Brown switches", body)
+        self.assertIn("https://example.com/kb", body)
+
+    def test_offline_replay_does_not_double_insert_item(self):
+        client = self.make_client()
+        payload = {
+            "name": "Desk lamp",
+            "price": "300000",
+            "priority": "high",
+            "client_id": "cid-wishlist-1",
+        }
+        client.post("/wishlist/add", data=payload)
+        client.post("/wishlist/add", data=payload)
+
+        self.assertEqual(len(self._items()), 1, "a replayed client_id must insert once")
+
+    def test_edit_updates_saved_progress_and_ready_state(self):
+        client = self.make_client()
+        self._add_item(client, price="1000000")
+        item_id = self._items()[0]["id"]
+
+        client.post(
+            f"/wishlist/{item_id}/edit",
+            data={
+                "name": "Mechanical keyboard",
+                "price": "1000000",
+                "saved_amount": "1000000",
+                "priority": "high",
+                "note": "done saving",
+                "url": "https://example.com",
+            },
+        )
+
+        row = self._items()[0]
+        self.assertEqual(row["saved_amount"], 1_000_000)
+        self.assertEqual(row["priority"], "high")
+
+        body = client.get("/wishlist").get_data(as_text=True)
+        self.assertIn("READY", body)
+
+    def test_mark_bought_archives_and_restore_brings_it_back(self):
+        client = self.make_client()
+        self._add_item(client, name="Espresso machine")
+        item_id = self._items()[0]["id"]
+
+        client.post(f"/wishlist/{item_id}/buy")
+        row = self._items()[0]
+        self.assertIsNotNone(row["bought_at"])
+        body = client.get("/wishlist").get_data(as_text=True)
+        self.assertIn("BOUGHT", body)
+        self.assertIn("Espresso machine", body)
+
+        client.post(f"/wishlist/{item_id}/restore")
+        self.assertIsNone(self._items()[0]["bought_at"])
+
+    def test_delete_removes_the_item(self):
+        client = self.make_client()
+        self._add_item(client)
+        item_id = self._items()[0]["id"]
+
+        client.post(f"/wishlist/{item_id}/delete")
+
+        self.assertEqual(self._items(), [])
+
+    def test_invalid_price_is_rejected(self):
+        client = self.make_client()
+        self._add_item(client, name="Free thing", price="0")
+        self._add_item(client, name="Negative thing", price="-5")
+        self._add_item(client, name="Huge thing", price=str(1_000_000_000_001))
+
+        self.assertEqual(self._items(), [])
+
+    def test_unknown_priority_falls_back_to_medium(self):
+        client = self.make_client()
+        self._add_item(client, priority="urgent")
+        self.assertEqual(self._items()[0]["priority"], "medium")
+
+    def test_unsafe_url_is_not_rendered(self):
+        client = self.make_client()
+        self._add_item(client, url="javascript:alert(1)")
+
+        self.assertIsNone(self._items()[0]["url"])
+        body = client.get("/wishlist").get_data(as_text=True)
+        self.assertNotIn("javascript:", body)
+
+    def test_add_form_is_offline_queued(self):
+        client = self.make_client()
+        body = client.get("/wishlist").get_data(as_text=True)
+        self.assertIn('data-offline-queue="wishlist"', body)
+
+    def test_wishlist_requires_login(self):
+        resp = self.make_client(authenticated=False).get("/wishlist")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login", resp.headers["Location"])
+
+    def test_saved_progress_does_not_move_money(self):
+        client = self.make_client()
+        self._add_item(client, price="500000", saved_amount="200000")
+
+        self.assertEqual(self.pot_balances()["Auto-saved (Unspent)"], 0)
+        data = self.dashboard()
+        self.assertEqual(data["available"], 0)
+        self.assertEqual(data["cash_left"], 0)
 
 
 class TrendChartTests(LedgerTestCase):

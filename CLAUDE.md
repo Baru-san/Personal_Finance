@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 "Ledger" — a retro terminal-styled personal finance tracker: scheduled budget
-categories, an auto-save-on-unspent rule, and savings pots, backed by SQLite.
+categories, a catch-up-safe auto-save-on-unspent rule, savings pots with
+pot-to-pot / pot-to-available allocation, and trends charts, backed by SQLite.
 Single-user, self-hosted, gated by one shared password (see Authentication
 below) — no per-user accounts.
 
@@ -70,8 +71,12 @@ logic → routes.
   when `ledger.db` is missing, since it is also where schema changes are
   applied and a deployed database on a Fly volume would otherwise never get
   a newly added table. It is idempotent (`CREATE TABLE IF NOT EXISTS`, and
-  the pots seed only fires on an empty table). `categories` and `income_sources` intentionally
-  start empty — the user adds their own via the UI, nothing is pre-seeded.
+  the pots seed only fires on an empty table). It also applies the feature
+  migrations the same way: `categories.created_at`, `transactions.sweep_key`
+  plus its partial unique index, and the `pot_movements` table. All are
+  additive, so an older database upgrades in place. `categories` and
+  `income_sources` intentionally start empty — the user adds their own via the
+  UI, nothing is pre-seeded.
 - **Schema** (SQLite, `ledger.db`): `categories` (budget_amount, optional
   `due_day` 1–28 for recurring bills, `period` weekly/monthly, and `created_at`
   — when the category was added, which bounds catch-up sweeps; legacy rows
@@ -152,9 +157,15 @@ logic → routes.
   via `pot_withdrawn_for_range`). `apply_pot_movement()` is the one helper: it
   refuses to overdraw the source pot, refuses a pot-to-itself move, and only
   moves balances when the `pot_movements` insert actually happened
-  (`cur.rowcount`), so a replayed `client_id` can't double-move money.
-  `POST /savings/movement/<id>/delete` undoes one, re-crediting the source pot
-  and (for a transfer) debiting the destination. The Savings tab's merged
+  (`cur.rowcount`), so a replayed `client_id` can't double-move money. It
+  returns a reason code (`ok`/`invalid`/`unknown_pot`/`same_pot`/`insufficient`/
+  `duplicate`) that the route turns into `flash()` feedback; a malformed or `0`
+  `to_pot_id` is rejected rather than being treated as a withdrawal. The debit
+  is guarded (`UPDATE ... WHERE balance >= amount`, rolled back if it doesn't
+  apply) so two concurrent requests can't overdraw, and
+  `POST /savings/movement/<id>/delete` deletes the row *before* re-crediting the
+  source pot (and, for a transfer, debiting the destination), so a duplicate or
+  racing undo can't move money twice. The Savings tab's merged
   "POT MOVEMENTS" log is `POT_MOVEMENT_LOG_SQL`, a `UNION ALL` of
   `pot_deposits` (set-aside) and `pot_movements` (transfer/withdraw) tagged
   with a `source` column so each row links to the right UNDO route.
@@ -183,7 +194,10 @@ logic → routes.
   charge (higher amount) with no separate ledger entry. The one exception is
   `auto_save` transactions, where the delta must also be applied by hand to
   the "Auto-saved (Unspent)" pot's stored `balance`, since that figure is a
-  running total rather than derived.
+  running total rather than derived. `apply_journal_edit()` guards the update
+  with `WHERE id = ? AND amount = ?` (the amount read at request start) and
+  rolls back on a lost race, so two concurrent edits cannot apply the same pot
+  delta twice.
 - **Routes** are thin: they pull data via the domain-logic functions above,
   write through `db.execute(...)` + `db.commit()` directly (no ORM), and
   `redirect(url_for(...))` back to the relevant page after POSTs.
@@ -245,22 +259,26 @@ losing unsynced writes on logout would be worse than a stale cache).
 ## Templates & static
 
 - `templates/dashboard.html`, `templates/ledger.html`, `templates/journal.html`,
-  and `templates/income.html` are server-rendered Jinja2, styled by the single
-  `static/style.css` (retro terminal/CRT theme: monospace, scanline/blink
-  effects, `.window`/`.pot`/`.log-entry` components). All four pages share a
-  `.topnav` (Dashboard/Ledger/Income) in the top bar. Minimal inline
-  `<script>` blocks only (e.g. month dropdown, progress bar width) — no JS
-  framework or build pipeline.
+  `templates/income.html`, `templates/savings.html`, and `templates/trends.html`
+  are server-rendered Jinja2, styled by the single `static/style.css` (retro
+  terminal/CRT theme: monospace, scanline/blink effects,
+  `.window`/`.pot`/`.log-entry` components). Every shared-nav page carries a
+  `.topnav` (Dashboard/Ledger/Savings/Trends/Income) in the top bar. Minimal
+  inline `<script>` blocks only (e.g. month dropdown, progress bar width) — no
+  JS framework or build pipeline.
 - Templates read row data as `dict`-style (`t['field']`) or attribute-style
   (`c.field`) interchangeably — both work because of `sqlite3.Row`.
 - **Flash feedback**: write routes call `flash(msg, "success"|"error"|"info")`
   and redirect, and `templates/_flash.html` (included by every
   shared-nav page) renders and consumes them via `get_flashed_messages`. Used
   by the savings flows (deposit/allocate/undo) and `/close-day`, whose rejections
-  would otherwise be a silent redirect. The offline-queued add forms
-  (`data-offline-queue`) deliberately don't flash — those POSTs can be replayed
-  by `offline.js` without a page load, so the message would pile up in the
-  session cookie instead of being shown.
+  would otherwise be a silent redirect. The spend/category/income add forms
+  deliberately don't flash — those POSTs are replayed by `offline.js` without a
+  page load, so the message would pile up in the session cookie instead of
+  being shown. The savings deposit/allocate forms are now offline-queued too;
+  they still set a flash server-side, but the JS success path follows the
+  redirect in a background fetch, which consumes it before the browser
+  navigates (a known trade-off; see `docs/API.md`).
 
 ## Hosting on PythonAnywhere
 
@@ -293,8 +311,8 @@ default, which matters for two unrelated things: `SECRET_KEY` and
 `LEDGER_PASSWORD_HASH` should be set via `fly secrets` (not left to their
 on-disk `.secret_key`/`.password_hash` fallbacks — see Authentication above),
 while `ledger.db` itself needs a real Fly Volume, mounted somewhere other
-than the app's own directory (e.g. `/data`) with `DB_PATH` (env var,
-`app.py:15`) pointed at it — `DB_PATH` has no default other than
+than the app's own directory (e.g. `/data`) with `DB_PATH` (the env var set
+near the top of `app.py`) pointed at it — `DB_PATH` has no default other than
 `BASE_DIR/ledger.db`, so it must be set explicitly whenever the volume isn't
 mounted at the app directory. `/close-day` must be triggered by an external
 scheduler (Fly Machines scheduled run or cron) in production; there is no
