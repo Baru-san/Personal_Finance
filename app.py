@@ -214,7 +214,7 @@ def close_db(exception=None):
 # below in the client_id migration loop — safe only because every name here
 # is a hardcoded literal, never runtime input. Must never be extended with a
 # table name that comes from a request.
-MIGRATED_TABLES = ("categories", "transactions", "income_sources", "custom_incomes", "custom_expenses", "pot_deposits", "pot_movements")
+MIGRATED_TABLES = ("categories", "transactions", "income_sources", "custom_incomes", "custom_expenses", "pot_deposits", "pot_movements", "wishlist_items")
 
 
 def init_db():
@@ -291,6 +291,19 @@ def init_db():
             amount INTEGER NOT NULL,             -- always positive, money moved by hand out of a pot
             note TEXT,
             created_at TEXT NOT NULL,
+            client_id TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS wishlist_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            price INTEGER NOT NULL,              -- target/estimated price, integer Rupiah
+            saved_amount INTEGER NOT NULL DEFAULT 0, -- manual progress tracker; does NOT move money
+            priority TEXT NOT NULL DEFAULT 'medium', -- 'low', 'medium', or 'high'
+            note TEXT,
+            url TEXT,                            -- optional http(s) product link
+            created_at TEXT NOT NULL,
+            bought_at TEXT,                      -- NULL = active, timestamp = archived
             client_id TEXT
         );
         """
@@ -1108,6 +1121,33 @@ def journal(month_key):
     )
 
 
+def apply_journal_edit(db, row, amount, note):
+    """Apply an amount/note edit to a transaction that was read as `row`.
+
+    The UPDATE is guarded on the amount we originally read: if a concurrent
+    edit got there first, it matches no row and we roll back, so the same delta
+    can't be applied to the Auto-saved pot twice. On success a correctly-sized
+    pot delta (positive for an extra charge, negative for a refund) is applied
+    in the same transaction. Returns True when the edit was applied.
+    """
+    cur = db.execute(
+        "UPDATE transactions SET amount = ?, note = ? WHERE id = ? AND amount = ?",
+        (amount, note, row["id"], row["amount"]),
+    )
+    if not cur.rowcount:
+        db.rollback()
+        return False
+
+    delta = amount - row["amount"]
+    if row["kind"] == "auto_save" and delta != 0:
+        db.execute(
+            "UPDATE pots SET balance = balance + ? WHERE name = 'Auto-saved (Unspent)'",
+            (delta,),
+        )
+    db.commit()
+    return True
+
+
 @app.route("/journal/entry/<int:entry_id>/edit", methods=["POST"])
 def edit_journal_entry(entry_id):
     db = get_db()
@@ -1117,17 +1157,7 @@ def edit_journal_entry(entry_id):
 
     row = db.execute("SELECT * FROM transactions WHERE id = ?", (entry_id,)).fetchone()
     if row and amount and amount > 0:
-        delta = amount - row["amount"]  # positive = charged more, negative = refunded
-        db.execute(
-            "UPDATE transactions SET amount = ?, note = ? WHERE id = ?",
-            (amount, note, entry_id),
-        )
-        if row["kind"] == "auto_save" and delta != 0:
-            db.execute(
-                "UPDATE pots SET balance = balance + ? WHERE name = 'Auto-saved (Unspent)'",
-                (delta,),
-            )
-        db.commit()
+        apply_journal_edit(db, row, amount, note)
 
     return redirect(url_for("journal", month_key=month_key))
 
@@ -1710,6 +1740,167 @@ def trends():
         trend_range_label=trend_range_label,
         today=date.today().strftime("%d %b %Y").upper(),
     )
+
+
+WISHLIST_PRIORITIES = ("high", "medium", "low")
+
+
+def _wishlist_priority(value):
+    value = (value or "").strip().lower()
+    return value if value in WISHLIST_PRIORITIES else "medium"
+
+
+def _wishlist_url(value):
+    value = (value or "").strip()
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    return ""
+
+
+def _wishlist_saved_amount(value):
+    if value is None:
+        return 0
+    return max(0, min(value, AMOUNT_MAX))
+
+
+def _wishlist_item_view(row):
+    price = row["price"] or 0
+    saved = row["saved_amount"] or 0
+    return {
+        **dict(row),
+        "remaining": max(0, price - saved),
+        "pct": min(100, round(saved / price * 100)) if price > 0 else 0,
+        "ready": price > 0 and saved >= price,
+    }
+
+
+def _wishlist_form_values():
+    return {
+        "name": request.form.get("name", "").strip(),
+        "price": clamp_amount(request.form.get("price", type=int)),
+        "saved_amount": _wishlist_saved_amount(request.form.get("saved_amount", type=int)),
+        "priority": _wishlist_priority(request.form.get("priority")),
+        "note": request.form.get("note", "").strip(),
+        "url": _wishlist_url(request.form.get("url")),
+    }
+
+
+@app.route("/wishlist")
+def wishlist():
+    db = get_db()
+    active_rows = db.execute(
+        """SELECT * FROM wishlist_items
+           WHERE bought_at IS NULL
+           ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                    created_at DESC, id DESC"""
+    ).fetchall()
+    archived_rows = db.execute(
+        """SELECT * FROM wishlist_items
+           WHERE bought_at IS NOT NULL
+           ORDER BY bought_at DESC, id DESC"""
+    ).fetchall()
+
+    active = [_wishlist_item_view(row) for row in active_rows]
+    archived = [_wishlist_item_view(row) for row in archived_rows]
+    total_estimated = sum(item["price"] for item in active)
+    total_saved = sum(item["saved_amount"] for item in active)
+
+    return render_template(
+        "wishlist.html",
+        active=active,
+        archived=archived,
+        active_count=len(active),
+        total_estimated=total_estimated,
+        total_saved=total_saved,
+        total_remaining=max(0, total_estimated - total_saved),
+        today=date.today().strftime("%d %b %Y").upper(),
+    )
+
+
+@app.route("/wishlist/add", methods=["POST"])
+def add_wishlist_item():
+    db = get_db()
+    values = _wishlist_form_values()
+    client_id = request.form.get("client_id") or None
+
+    if values["name"] and values["price"]:
+        db.execute(
+            """INSERT INTO wishlist_items
+               (name, price, saved_amount, priority, note, url, created_at, client_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(client_id) WHERE client_id IS NOT NULL DO NOTHING""",
+            (
+                values["name"],
+                values["price"],
+                values["saved_amount"],
+                values["priority"],
+                values["note"] or None,
+                values["url"] or None,
+                datetime.now().isoformat(timespec="seconds"),
+                client_id,
+            ),
+        )
+        db.commit()
+
+    return redirect(url_for("wishlist"))
+
+
+@app.route("/wishlist/<int:item_id>/edit", methods=["POST"])
+def edit_wishlist_item(item_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM wishlist_items WHERE id = ?", (item_id,)).fetchone()
+    if row is None:
+        return redirect(url_for("wishlist"))
+
+    values = _wishlist_form_values()
+    if values["name"] and values["price"]:
+        db.execute(
+            """UPDATE wishlist_items
+               SET name = ?, price = ?, saved_amount = ?, priority = ?, note = ?, url = ?
+               WHERE id = ?""",
+            (
+                values["name"],
+                values["price"],
+                values["saved_amount"],
+                values["priority"],
+                values["note"] or None,
+                values["url"] or None,
+                item_id,
+            ),
+        )
+        db.commit()
+
+    return redirect(url_for("wishlist"))
+
+
+@app.route("/wishlist/<int:item_id>/buy", methods=["POST"])
+def buy_wishlist_item(item_id):
+    db = get_db()
+    db.execute(
+        "UPDATE wishlist_items SET bought_at = ? WHERE id = ? AND bought_at IS NULL",
+        (datetime.now().isoformat(timespec="seconds"), item_id),
+    )
+    db.commit()
+    return redirect(url_for("wishlist"))
+
+
+@app.route("/wishlist/<int:item_id>/restore", methods=["POST"])
+def restore_wishlist_item(item_id):
+    db = get_db()
+    db.execute(
+        "UPDATE wishlist_items SET bought_at = NULL WHERE id = ?",
+        (item_id,),
+    )
+    db.commit()
+    return redirect(url_for("wishlist"))
+
+
+@app.route("/wishlist/<int:item_id>/delete", methods=["POST"])
+def delete_wishlist_item(item_id):
+    db = get_db()
+    db.execute("DELETE FROM wishlist_items WHERE id = ?", (item_id,))
+    db.commit()
+    return redirect(url_for("wishlist"))
 
 
 @app.route("/income")

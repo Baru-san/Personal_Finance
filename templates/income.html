@@ -21,6 +21,7 @@
       <a href="{{ url_for('savings') }}">Savings</a>
       <a href="{{ url_for('trends') }}">Trends</a>
       <a href="{{ url_for('income') }}" class="active">Income</a>
+      <a href="{{ url_for('wishlist') }}">Wishlist</a>
     </nav>
     <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
   </div>

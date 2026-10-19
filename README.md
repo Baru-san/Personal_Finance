@@ -1,7 +1,8 @@
 # Ledger — Personal Finance Tracker (Flask)
 
 Retro terminal-style dashboard for your personal budget: scheduled categories,
-auto-save-on-unspent logic, and savings pots — backed by SQLite.
+catch-up-safe auto-save-on-unspent, savings pots with pot-to-pot / available
+allocation, and trends charts — backed by SQLite.
 
 ## Run locally
 
@@ -45,6 +46,14 @@ previous months, one-off entries, and pot deposits/transfers/withdrawals, all
 dated relative to today. Re-running it rebuilds the dummy from scratch; your
 real `ledger.db` is never touched.
 
+### Tests
+
+    python -m unittest discover -s tests -v
+
+Uses the stdlib `unittest` runner and Flask's test client against a throwaway
+temp database — no extra dependencies, and your real `ledger.db` is never
+touched.
+
 ### Skipping the password while developing
 
 To run without any login at all — no setup wizard, no password prompt — start
@@ -87,6 +96,13 @@ so never set it on a deployed instance.
 - **Edit journal**: from the Ledger page, "Edit Journal" opens an editable
   view of that month's spend/auto-save entries — changing an amount acts as
   a refund (lower) or extra charge (higher).
+- **Trends**: the Trends tab shows net cash flow (income vs spend per month)
+  and the cumulative auto-saved total, both running from September 2026 through
+  the current month. The Dashboard's day-by-day spending trend scales its axis
+  to the whole current month.
+- **Feedback**: writes like setting aside, allocating, undoing, and Run Daily
+  Close show a short success/error banner at the top of the next page instead
+  of silently redirecting.
 
 ## Automating the daily close (no manual button)
 
@@ -99,6 +115,10 @@ instead of clicking the button:
   `curl -X POST -H "X-Close-Day-Token: $CLOSE_DAY_TOKEN" https://<app>.fly.dev/close-day`
 - **Simple alternative**: a system cron job wherever this is hosted:
   `0 0 * * * curl -X POST -H "X-Close-Day-Token: $CLOSE_DAY_TOKEN" http://localhost:5000/close-day`
+
+Because the sweep is catch-up safe, this daily job balances the books even if
+it runs late: it banks each completed week/month that hasn't been banked yet,
+so a missed run is picked up the next day rather than losing a period.
 
 If `CLOSE_DAY_TOKEN` isn't set, `/close-day` falls back to requiring a
 logged-in session, so a scheduler with no way to authenticate can't call it —
@@ -119,8 +139,9 @@ instead:
 - `close_day_task.py` — the daily close, for their Tasks tab. Free accounts
   can't make arbitrary outbound HTTP requests, so instead of curling
   `/close-day` it imports the app and drives the same route in-process via
-  Flask's test client. Safe to run more than once a day; `sweep_unspent`
-  refuses to sweep a window twice.
+  Flask's test client. Safe to run more than once a day and catch-up safe: the
+  per-window `sweep_key` guard means each week/month is banked at most once, and
+  a missed day is picked up on the next run.
 
 Outline: sign up → `git clone` in a Bash console →
 `mkvirtualenv --python=$(which python3.11) ledger` (use the interpreter
@@ -192,3 +213,34 @@ in-app scheduler, so `/close-day` needs an external trigger carrying the
 Schema changes are applied on every boot: `init_db()` runs at import time
 under gunicorn and is idempotent, so a redeploy that adds a table picks it up
 on the existing volume.
+
+## Updating a deployment
+
+Updates are additive and applied automatically — `init_db()` runs at import
+time and migrates the database in place (`ALTER TABLE ... ADD COLUMN` and
+`CREATE ... IF NOT EXISTS`), so there's no manual schema step. The new columns
+and the `pot_movements` table are ignored by the previous version, so rolling
+the code back is safe too. Back up the database anyway.
+
+**PythonAnywhere**
+
+    cd ~/Personal_Finance
+    cp ledger.db ledger.db.bak-$(date +%F)
+    git pull origin main          # or `git pull origin <branch>` to test one
+
+Then open the **Web** tab and click **Reload** — pulling the code alone does
+not re-import the app. The reload is what runs `init_db()` and applies the
+migrations.
+
+**Fly.io**
+
+    fly ssh console -C "cp /data/ledger.db /data/ledger.db.bak"   # back up
+    git pull && fly deploy
+
+`fly deploy` boots the new image, which migrates the volume's database on
+startup. The volume attaches to a single machine, so this is a brief restart,
+not a zero-downtime rollout.
+
+If something looks wrong, restore the backup (`cp ledger.db.bak-<date>
+ledger.db` on PythonAnywhere; the same `cp` over `/data/ledger.db` on Fly) and
+reload or redeploy the previous version.

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#06120a">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<title>LEDGER// Wishlist</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='offline.js') }}" defer></script>
+<script src="{{ url_for('static', filename='chart.js') }}" defer></script>
+</head>
+<body>
+
+  <div class="topbar">
+    <a class="logo" href="{{ url_for('dashboard') }}">// LEDGER.SYS</a>
+    <nav class="topnav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('ledger') }}">Ledger</a>
+      <a href="{{ url_for('savings') }}">Savings</a>
+      <a href="{{ url_for('trends') }}">Trends</a>
+      <a href="{{ url_for('income') }}">Income</a>
+      <a href="{{ url_for('wishlist') }}" class="active">Wishlist</a>
+    </nav>
+    <div class="status"><div class="dot blink"></div><span class="status-label">SYNCED &nbsp;|&nbsp;</span> {{ today }}{% if not auth_disabled %}<form method="post" action="{{ url_for('logout') }}" class="logout-form"><button type="submit" class="logout-btn">Logout</button></form>{% endif %}</div>
+  </div>
+
+  {% include '_flash.html' %}
+
+  <section class="balance-hero">
+    <div class="prompt-line"><span>user@ledger</span>:~$ show wishlist --goals</div>
+    <div class="balance-label">Saved Toward Wishlist</div>
+    <div class="balance-value">{{ total_saved | rp }}</div>
+    <div class="balance-sub">
+      <span class="up">{{ active_count }}</span> active item{{ '' if active_count == 1 else 's' }} &nbsp;·&nbsp;
+      estimated cost <span class="up">{{ total_estimated | rp }}</span> &nbsp;·&nbsp;
+      still to save <span class="up">{{ total_remaining | rp }}</span>
+      <br>
+      Progress is a manual tracker — it does not move money between pots or change your available cash.
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">01</span>WISHLIST</div>
+    <div class="window-grid">
+      {% for item in active %}
+      <div class="window">
+        <div class="window-bar">
+          <span>{{ item.name | upper }}</span>
+          <span class="badge {{ item.priority }}">{{ item.priority | upper }}</span>
+        </div>
+        <div class="window-body">
+          <h3>{{ item.price | rp }}</h3>
+          <div class="bar-track">
+            <div class="bar-fill{{ ' warn' if item.ready else '' }}" data-pct="{{ item.pct }}" title="{{ item.pct }}% saved"></div>
+          </div>
+          <div class="window-figures">
+            <span>Saved {{ item.saved_amount | rp }}</span>
+            <span class="status {{ 'ok' if item.ready else 'warn' }}">{{ 'READY' if item.ready else (item.remaining | rp) + ' TO GO' }}</span>
+          </div>
+          {% if item.note %}<div class="wishlist-note">{{ item.note }}</div>{% endif %}
+          {% if item.url %}<a class="wishlist-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">OPEN LINK ↗</a>{% endif %}
+
+          <div class="window-actions">
+            <form action="{{ url_for('buy_wishlist_item', item_id=item.id) }}" method="post" style="display:inline;">
+              <button type="submit" class="logout-btn" title="Archive this item as bought">MARK BOUGHT</button>
+            </form>
+            <form action="{{ url_for('delete_wishlist_item', item_id=item.id) }}" method="post" style="display:inline;">
+              <button type="submit" class="logout-btn" title="Delete this item">DELETE</button>
+            </form>
+          </div>
+
+          <details class="edit-toggle">
+            <summary>EDIT</summary>
+            <form action="{{ url_for('edit_wishlist_item', item_id=item.id) }}" method="post" class="mini-form" style="flex-direction:column; align-items:stretch; gap:8px; margin-top:10px;">
+              <input type="text" name="name" value="{{ item.name }}" placeholder="Item name" required>
+              <input type="text" name="price" data-money-input value="{{ item.price }}" placeholder="Estimated price (Rp)" required>
+              <input type="text" name="saved_amount" data-money-input value="{{ item.saved_amount }}" placeholder="Saved so far (Rp)">
+              <select name="priority">
+                <option value="high" {{ 'selected' if item.priority == 'high' else '' }}>High priority</option>
+                <option value="medium" {{ 'selected' if item.priority == 'medium' else '' }}>Medium priority</option>
+                <option value="low" {{ 'selected' if item.priority == 'low' else '' }}>Low priority</option>
+              </select>
+              <input type="text" name="note" value="{{ item.note or '' }}" placeholder="Note (optional)">
+              <input type="url" name="url" value="{{ item.url or '' }}" placeholder="Link (https://, optional)">
+              <button type="submit">SAVE CHANGES</button>
+            </form>
+          </details>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Nothing on the wishlist yet. Add the thing you want to buy below.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">02</span>ADD TO WISHLIST</div>
+    <form action="{{ url_for('add_wishlist_item') }}" method="post" class="mini-form" data-offline-queue="wishlist" style="max-width:820px; flex-wrap:wrap; gap:10px;">
+      <input type="text" name="name" placeholder="What do you want to buy?" required style="flex:2; min-width:180px;">
+      <input type="text" name="price" data-money-input placeholder="Estimated price (Rp)" required style="flex:1; min-width:130px;">
+      <input type="text" name="saved_amount" data-money-input placeholder="Saved so far (optional)" style="flex:1; min-width:150px;">
+      <select name="priority" style="flex:0 0 auto;">
+        <option value="high">High priority</option>
+        <option value="medium" selected>Medium priority</option>
+        <option value="low">Low priority</option>
+      </select>
+      <input type="text" name="note" placeholder="Note (optional)" style="flex:2; min-width:160px;">
+      <input type="url" name="url" placeholder="Link (https://, optional)" style="flex:2; min-width:180px;">
+      <button type="submit" style="flex:0 0 auto;">ADD ITEM</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><span class="num">03</span>BOUGHT / ARCHIVED</div>
+    <div class="log">
+      {% for item in archived %}
+      <div class="log-entry">
+        <div class="left">
+          <div class="ts">{{ item.bought_at[5:10] if item.bought_at else '' }}</div>
+          <div class="msg">
+            <span class="tag save">[BOUGHT]</span> {{ item.name }}
+            {% if item.note %} — {{ item.note }}{% endif %}
+          </div>
+        </div>
+        <div class="amt pos">
+          {{ item.price | rp }}
+          <form action="{{ url_for('restore_wishlist_item', item_id=item.id) }}" method="post" style="display:inline;">
+            <button type="submit" class="logout-btn" title="Move back to the wishlist">RESTORE</button>
+          </form>
+          <form action="{{ url_for('delete_wishlist_item', item_id=item.id) }}" method="post" style="display:inline;">
+            <button type="submit" class="logout-btn" title="Delete this item">DELETE</button>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Nothing bought yet. Marking an item as bought moves it here.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="actions">
+    <a href="{{ url_for('dashboard') }}"><button type="button" class="btn ghost">← Back to Dashboard</button></a>
+  </div>
+
+  <footer>
+    <div>LEDGER.SYS — FLASK + SQLITE</div>
+    <div>WISHLIST PROGRESS IS A TRACKER — IT DOES NOT MOVE MONEY OR POTS</div>
+  </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  initPctBars();
+});
+</script>
+
+</body>
+</html>
